@@ -1,0 +1,4 @@
+# Metadata of the PDF manuals (see "make pdf"), shown on their cover page.
+author:
+  - name: Aleksandar Lazic
+    email: al-haproxy@none.at

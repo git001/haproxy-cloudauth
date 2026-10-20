@@ -77,11 +77,13 @@ backend s3
 - [doc/internals-api.md](doc/internals-api.md): the internal API, for the
   developers of the providers.
 
-They are written in Markdown, and may be turned into other formats with
-[pandoc](https://pandoc.org/), for instance into a PDF:
+They are written in Markdown. `make pdf` turns them into PDF documents in
+`build/`, when [pandoc](https://pandoc.org/) and [typst](https://typst.app/)
+are installed, otherwise it is skipped. Their paths may be set with `PANDOC`
+and `TYPST`:
 
 ```
-pandoc --toc -o configuration.pdf doc/configuration.md
+make pdf PANDOC=/path/to/pandoc TYPST=/path/to/typst
 ```
 
 ### Tests

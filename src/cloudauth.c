@@ -9,8 +9,8 @@
  * 2 of the License, or (at your option) any later version.
  *
  * A credential profile is declared by a "cloudauth" section. It describes how
- * the requests sent to the servers referencing it are authenticated. It is
- * used by the cloudauth filter.
+ * the requests are authenticated by the cloudauth filter instances referencing
+ * it.
  */
 
 #include <sys/stat.h>
@@ -35,7 +35,6 @@
 #include <haproxy/log.h>
 #include <haproxy/proxy.h>
 #include <haproxy/sample.h>
-#include <haproxy/server.h>
 #include <haproxy/stats.h>
 #include <haproxy/task.h>
 #include <haproxy/ticks.h>
@@ -47,7 +46,7 @@
 #include <cloudauth/cloudauth_sigv4.h>
 #include <cloudauth/cloudauth_trace.h>
 
-/* cloudauth stats module, for the backends and the servers */
+/* cloudauth stats module, for the backends */
 enum {
 	CLOUDAUTH_ST_REQ_SIGNED = 0,
 	CLOUDAUTH_ST_REQ_FAILED,
@@ -112,27 +111,24 @@ static struct stats_module cloudauth_stats_module = {
 	.stats_count   = CLOUDAUTH_ST_COUNT,
 	.counters      = &cloudauth_counters,
 	.counters_size = sizeof(cloudauth_counters),
-	.domain_flags  = MK_STATS_PROXY_DOMAIN(STATS_PX_CAP_BE | STATS_PX_CAP_SRV),
+	.domain_flags  = MK_STATS_PROXY_DOMAIN(STATS_PX_CAP_BE),
 	.clearable     = 1,
 };
 
 INITCALL1(STG_REGISTER, stats_register_module, &cloudauth_stats_module);
 
-/* Counts a request sent to server <srv>, authenticated or not depending on
- * <failed>, for the server and its backend.
+/* Counts a request of backend <px>, authenticated or not depending on
+ * <failed>.
  */
-void cloudauth_count_request(struct server *srv, int failed)
+void cloudauth_count_request(struct proxy *px, int failed)
 {
-	struct cloudauth_counters *srv_ctr, *px_ctr;
+	struct cloudauth_counters *px_ctr;
 
-	srv_ctr = EXTRA_COUNTERS_GET(srv->extra_counters, &cloudauth_stats_module);
-	px_ctr = EXTRA_COUNTERS_GET(srv->proxy->extra_counters_be, &cloudauth_stats_module);
+	px_ctr = EXTRA_COUNTERS_GET(px->extra_counters_be, &cloudauth_stats_module);
 	if (failed) {
-		_HA_ATOMIC_INC(&srv_ctr->req_failed);
 		_HA_ATOMIC_INC(&px_ctr->req_failed);
 	}
 	else {
-		_HA_ATOMIC_INC(&srv_ctr->req_signed);
 		_HA_ATOMIC_INC(&px_ctr->req_signed);
 	}
 }
@@ -628,8 +624,8 @@ static const struct ist cloudauth_cred_hdr_pfx[] = {
 
 /* Removes all the headers that may carry credentials from the request in
  * <htx>, so that the client cannot impersonate HAProxy nor interfere with the
- * signature. It also removes the ones set for a previous server. The names of
- * the removed headers are traced for the stream <strm> and the profile <prof>.
+ * signature. The names of the removed headers are traced for the stream <strm>
+ * and the profile <prof>.
  */
 static void cloudauth_strip_cred_headers(struct htx *htx, const struct stream *strm,
                                          const struct cloudauth_profile *prof)
@@ -783,63 +779,16 @@ static int cloudauth_set_host(struct htx *htx, const struct ist host)
 	return http_add_header(htx, ist("host"), host, 1);
 }
 
-/* The SNI expression automatically set by HAProxy on the HTTPS servers without
- * "sni" (see srv_configure_auto_sni()). It is the Host header sent by the
- * client, which must never select the storage account or bucket.
+/* Authenticates the request in <htx> of stream <strm> with profile <prof>:
+ * the headers and the query string parameters which may carry credentials are
+ * removed, the Host header is set to <host>, then the request is signed.
+ * Returns 0 on success, otherwise -1 with <reason> set to a static string
+ * describing the failure.
  */
-#define CLOUDAUTH_AUTO_SNI_EXPR "req.hdr(host),field(1,:)"
-
-/* Returns non-zero if server <srv> uses the automatic SNI */
-static int cloudauth_srv_auto_sni(const struct server *srv)
-{
-	return srv->sni_expr && strcmp(srv->sni_expr, CLOUDAUTH_AUTO_SNI_EXPR) == 0;
-}
-
-/* Returns the host name the requests sent to server <srv> are destined to:
- * the SNI of the server if any, otherwise the host name of its address. Without
- * TLS, the SNI is not sent but still names the server. The SNI expression is
- * evaluated for session <sess> and stream <strm>. The client Host header is
- * never used, unless explicitly configured with "sni". Returns an empty ist
- * with <reason> set if there is no host name.
- */
-static struct ist cloudauth_srv_host(struct server *srv, struct session *sess, struct stream *strm,
-                                     const char **reason)
-{
-	struct sample *smp;
-
-	if (cloudauth_srv_auto_sni(srv))
-		goto no_host;
-
-	if (srv->ssl_ctx.sni) {
-		smp = sample_fetch_as_type(srv->proxy, sess, strm, SMP_OPT_DIR_REQ | SMP_OPT_FINAL,
-		                           srv->ssl_ctx.sni, SMP_T_STR);
-		if (!smp || !smp->data.u.str.data) {
-			*reason = "the 'sni' expression of the server gave no host name";
-			return IST_NULL;
-		}
-		return ist2(smp->data.u.str.area, smp->data.u.str.data);
-	}
-
-	if (srv->hostname)
-		return ist(srv->hostname);
-
-  no_host:
-	*reason = "the server has neither a host name nor an explicit 'sni'";
-	return IST_NULL;
-}
-
-/* Authenticates the request in <htx> for server <srv>, which must use a
- * credential profile: the headers and the query string parameters which may
- * carry credentials are removed, the Host header is set, then the request is
- * signed. <sess> and <strm> are used to evaluate the SNI of the server. Returns
- * 0 on success, otherwise -1 with <reason> set to a static string describing
- * the failure.
- */
-int cloudauth_authenticate(struct server *srv, struct session *sess, struct stream *strm,
+int cloudauth_authenticate(struct cloudauth_profile *prof, struct ist host, struct stream *strm,
                            struct htx *htx, const char **reason)
 {
-	struct cloudauth_profile *prof = srv->cloudauth->profile;
-	struct ist host, detail;
+	struct ist detail;
 	int ret = -1;
 
 	TRACE_ENTER(CLOUDAUTH_EV_REQ, strm, prof);
@@ -851,9 +800,6 @@ int cloudauth_authenticate(struct server *srv, struct session *sess, struct stre
 		goto out;
 	}
 
-	host = cloudauth_srv_host(srv, sess, strm, reason);
-	if (!isttest(host))
-		goto out;
 	if (!cloudauth_set_host(htx, host)) {
 		*reason = "cannot set the Host header";
 		goto out;
@@ -1727,131 +1673,6 @@ static int cfg_parse_cloudauth_input(char **args, int section_type, struct proxy
 	return err_code;
 }
 
-/* Releases the cloudauth settings of server <srv>. Called when the server is
- * released.
- */
-void cloudauth_srv_free(struct server *srv)
-{
-	if (!srv->cloudauth)
-		return;
-	ha_free(&srv->cloudauth->profile_name);
-	ha_free(&srv->cloudauth);
-}
-
-/* Resolves the profile referenced by server <srv> and checks the server may
- * use it. Returns 0 on success, otherwise -1 with <err> filled.
- */
-static int cloudauth_srv_resolve(struct server *srv, char **err)
-{
-	struct cloudauth_srv *conf = srv->cloudauth;
-	struct filter_instance *inst;
-
-	conf->profile = cloudauth_find_profile(conf->profile_name);
-	if (!conf->profile) {
-		memprintf(err, "unknown cloudauth profile '%s'", conf->profile_name);
-		return -1;
-	}
-
-	if (srv->proxy->mode != PR_MODE_HTTP) {
-		memprintf(err, "'cloudauth' requires an HTTP backend");
-		return -1;
-	}
-
-	/* without the filter, the requests would be sent unauthenticated and
-	 * with the client credentials.
-	 */
-	inst = flt_find_instance(srv->proxy, &flt_cloudauth_cls, NULL);
-	if (!inst || !inst->enabled) {
-		memprintf(err, "'cloudauth' requires an enabled cloudauth filter in backend '%s' "
-		          "(see 'filter-config cloudauth enabled')", srv->proxy->id);
-		return -1;
-	}
-	return 0;
-}
-
-/* Parses the "cloudauth" server keyword:
- *    cloudauth <profile>
- * For the servers declared in the configuration, the profile is resolved once
- * the configuration is parsed, because it may be declared after the server.
- * The dynamic servers are resolved immediately.
- */
-static int srv_parse_cloudauth(char **args, int *cur_arg, struct proxy *px, struct server *srv, char **err)
-{
-	const char *name = args[*cur_arg + 1];
-
-	if (!experimental_directives_allowed) {
-		memprintf(err, "'%s' is experimental, must be allowed via a global 'expose-experimental-directives'",
-		          args[*cur_arg]);
-		return ERR_ALERT | ERR_FATAL;
-	}
-	mark_tainted(TAINTED_CONFIG_EXP_KW_DECLARED);
-
-	if (!*name) {
-		memprintf(err, "'%s' expects a cloudauth profile name", args[*cur_arg]);
-		return ERR_ALERT | ERR_FATAL;
-	}
-	if (srv->cloudauth) {
-		memprintf(err, "'%s' may only be set once", args[*cur_arg]);
-		return ERR_ALERT | ERR_FATAL;
-	}
-
-	srv->cloudauth = calloc(1, sizeof(*srv->cloudauth));
-	if (!srv->cloudauth)
-		goto oom;
-	srv->cloudauth->profile_name = strdup(name);
-	if (!srv->cloudauth->profile_name)
-		goto oom;
-
-	/* By default, HAProxy uses the client Host header as SNI, which would
-	 * let the client select the storage account or bucket. Use the host
-	 * name of the server address instead. It is replaced by a "sni" set
-	 * after this keyword. Without TLS, it only names the server.
-	 */
-	if (srv->hostname && !srv->sni_expr && !(srv->ssl_ctx.options & SRV_SSL_O_NO_AUTO_SNI)) {
-		memprintf(&srv->sni_expr, "str(%s)", srv->hostname);
-		if (!srv->sni_expr) {
-			memprintf(err, "out of memory");
-			return ERR_ALERT | ERR_FATAL;
-		}
-	}
-
-	if (!(srv->flags & SRV_F_DYNAMIC))
-		return 0;
-	if (cloudauth_srv_resolve(srv, err) < 0)
-		return ERR_ALERT | ERR_FATAL;
-	return 0;
-
-  oom:
-	cloudauth_srv_free(srv);
-	memprintf(err, "out of memory");
-	return ERR_ALERT | ERR_FATAL;
-}
-
-/* Resolves the profiles of the servers declared in the configuration */
-static int cloudauth_srv_postcheck(struct server *srv)
-{
-	char *err = NULL;
-
-	if (!srv->cloudauth || srv->cloudauth->profile)
-		return ERR_NONE;
-
-	if (cloudauth_srv_resolve(srv, &err) < 0) {
-		ha_alert("parsing [%s:%d] : server '%s' in backend '%s' : %s.\n",
-		         srv->conf.file, srv->conf.line, srv->id, srv->proxy->id, err);
-		free(err);
-		return ERR_ALERT | ERR_FATAL;
-	}
-
-	/* the dynamic servers are only checked at runtime */
-	if (cloudauth_srv_auto_sni(srv) || (!srv->sni_expr && !srv->hostname)) {
-		ha_alert("parsing [%s:%d] : server '%s' in backend '%s' : 'cloudauth' requires either a host name "
-		         "as server address or an explicit 'sni', the client Host header is never used by default.\n",
-		         srv->conf.file, srv->conf.line, srv->id, srv->proxy->id);
-		return ERR_ALERT | ERR_FATAL;
-	}
-	return ERR_NONE;
-}
-
 /* Context of the "show cloudauth" command */
 struct show_cloudauth_ctx {
 	struct cloudauth_profile *next;  /* next profile to dump, NULL once done */
@@ -2240,13 +2061,6 @@ static struct cfg_kw_list cfg_kws = { ILH, {
 
 INITCALL1(STG_REGISTER, cloudauth_register_keywords, &cfg_kws);
 
-static struct srv_kw_list srv_kws = { "CLOUDAUTH", { }, {
-	{ "cloudauth", srv_parse_cloudauth, 1, 0, 1 }, /* credential profile used to authenticate the requests */
-	{ NULL, NULL, 0, 0, 0 },
-}};
-
-INITCALL1(STG_REGISTER, srv_register_keywords, &srv_kws);
-
 static struct cli_kw_list cli_kws = {{ }, {
 	{ { "show", "cloudauth", NULL }, "show cloudauth [<profile>]              : show the state of the cloudauth credential profiles",
 	  cli_parse_show_cloudauth, cli_io_handler_show_cloudauth, NULL, NULL, 0 },
@@ -2260,7 +2074,6 @@ static struct cli_kw_list cli_kws = {{ }, {
 }};
 
 INITCALL1(STG_REGISTER, cli_register_kw, &cli_kws);
-REGISTER_POST_SERVER_CHECK(cloudauth_srv_postcheck);
 REGISTER_CONFIG_SECTION("cloudauth", cfg_parse_cloudauth, cfg_postsection_cloudauth);
 REGISTER_POST_CHECK(cloudauth_post_check);
 REGISTER_POST_DEINIT(cloudauth_deinit);

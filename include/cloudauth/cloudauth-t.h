@@ -268,10 +268,11 @@ struct cloudauth_provider {
 	struct list list;               /* next registered provider, only used on startup */
 };
 
-/* The cloudauth settings of a server */
-struct cloudauth_srv {
+/* Configuration of a cloudauth filter instance */
+struct cloudauth_flt_conf {
 	char *profile_name;                 /* name of the profile, until it is resolved */
 	struct cloudauth_profile *profile;  /* the profile, once resolved */
+	char *host;                         /* the Host header set on the requests */
 };
 
 #endif /* _CLOUDAUTH_T_H */

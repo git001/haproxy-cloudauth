@@ -15,7 +15,6 @@
 
 #include <haproxy/cfgparse.h>
 #include <haproxy/istbuf.h>
-#include <haproxy/server-t.h>
 
 #include <cloudauth/cloudauth-t.h>
 
@@ -26,7 +25,7 @@
 #define CLOUDAUTH_CFG_SECTION  CFG_NONE
 
 struct htx;
-struct session;
+struct proxy;
 struct stream;
 
 extern struct list cloudauth_profiles;
@@ -42,8 +41,7 @@ int cloudauth_find_input(const struct cloudauth_profile *prof, const char *name)
 int cloudauth_set_input(struct cloudauth_profile *prof, int idx, const struct ist value, char **err);
 enum cloudauth_cred_state cloudauth_cred_state(struct cloudauth_profile *prof);
 
-void cloudauth_srv_free(struct server *srv);
-void cloudauth_count_request(struct server *srv, int failed);
+void cloudauth_count_request(struct proxy *px, int failed);
 
 void cloudauth_register_provider(struct cloudauth_provider *prov);
 struct cloudauth_profile *cloudauth_cfg_profile(void);
@@ -58,17 +56,7 @@ void cloudauth_fetch_now(struct cloudauth_profile *prof, int force);
 int cloudauth_sign_bearer(const struct cloudauth_profile *prof, struct htx *htx);
 int cloudauth_sign_request(struct cloudauth_profile *prof, const struct stream *strm, struct htx *htx,
                            const char **reason);
-int cloudauth_authenticate(struct server *srv, struct session *sess, struct stream *strm,
+int cloudauth_authenticate(struct cloudauth_profile *prof, struct ist host, struct stream *strm,
                            struct htx *htx, const char **reason);
-
-/* Returns non-zero if the requests sent to server <srv> are authenticated */
-static inline int cloudauth_srv_enabled(const struct server *srv)
-{
-#if defined(USE_CLOUDAUTH)
-	return srv->cloudauth && srv->cloudauth->profile;
-#else
-	return 0;
-#endif
-}
 
 #endif /* _CLOUDAUTH_H */

@@ -108,7 +108,10 @@ order:
 
 The Host header sent by the client is never used: with most storages, it
 designates the account or the bucket, so a client could otherwise access any
-data the credentials give access to.
+data the credentials give access to. By default, the servers without `sni`
+present the Host header of the request as TLS SNI (see `sni-auto`), which is
+then `<host>` without its port. A server reached with another name must set its
+`sni`.
 
 The headers of the storages sent by the clients are needed by some requests,
 mostly the writes, such as `x-ms-blob-type` with Azure, or the metadata of the
@@ -132,10 +135,7 @@ Or to remove the unwanted ones:
 http-request del-header x-amz-acl
 http-request del-header x-amz-grant- -m beg
 http-request del-header x-amz-copy-source -m beg
-``` By default, the servers without `sni`
-present the Host header of the request as TLS SNI (see `sni-auto`), which is
-then `<host>` without its port. A server reached with another name must set its
-`sni`.
+```
 
 The signature does not depend on the server, so all the servers of the backend
 must give access to the same storage, behind the same host. The request is

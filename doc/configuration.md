@@ -113,6 +113,13 @@ present the Host header of the request as TLS SNI (see `sni-auto`), which is
 then `<host>` without its port. A server reached with another name must set its
 `sni`.
 
+The filter processes the requests independently of the HTTP versions. The
+clients may use HTTP/1.1, HTTP/2 or HTTP/3, and the servers HTTP/1.1 or HTTP/2.
+The requests of HTTP/2 and HTTP/3 clients carry the authority in their URI,
+which is replaced by `<host>` too, so that it is the one sent to an HTTP/2
+server. HTTP/3 has not been tested on any side, nor the QUIC servers, which are
+experimental in HAProxy.
+
 The headers of the storages sent by the clients are needed by some requests,
 mostly the writes, such as `x-ms-blob-type` with Azure, or the metadata of the
 objects (`x-amz-meta-*`, `x-ms-meta-*`, `x-goog-meta-*`). However, some of them

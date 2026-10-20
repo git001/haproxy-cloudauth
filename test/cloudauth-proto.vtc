@@ -1,0 +1,91 @@
+varnishtest "The cloudauth filter authenticates the requests whatever the HTTP versions"
+
+feature ignore_unknown_macro
+
+setenv CLOUDAUTH_TOKEN storage-token
+
+# The storage is played by h2, over HTTP/1.1 and HTTP/2. It reports the
+# version of the request, its Host header, which is the authority with HTTP/2,
+# its URI and its credential.
+haproxy h2 -conf {
+    global
+        nbthread 1
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    frontend storage
+        bind "fd@${h1}"
+        bind "fd@${h2}" proto h2
+        http-request return status 200 content-type text/plain lf-string "%[req.ver];%[req.hdr(host)];%[url];%[req.fhdr(authorization)]"
+} -start
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth storage
+        signer bearer
+        token env:CLOUDAUTH_TOKEN
+    frontend fe
+        bind "fd@${fe}"
+        bind "fd@${feh2}" proto h2
+        use_backend be_h2 if { path_beg /h2/ }
+        default_backend be_h1
+    backend be_h1
+        filter-config cloudauth enabled profile storage host storage.example.com
+        server srv ${h2_h1_addr}:${h2_h1_port}
+    backend be_h2
+        http-request set-path %[path,regsub(^/h2,)]
+        filter-config cloudauth enabled profile storage host storage.example.com
+        server srv ${h2_h2_addr}:${h2_h2_port} proto h2
+} -start
+
+# HTTP/1.1 clients, in origin form and in absolute form, whose authority is
+# replaced as well
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/bucket/object" -hdr "Host: client.example.com" -hdr "Authorization: Bearer client"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "1.1;storage.example.com;/bucket/object;Bearer storage-token"
+
+    txreq -url "http://client.example.com/h2/bucket/object" -hdr "Host: client.example.com"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "2.0;storage.example.com;http://storage.example.com/bucket/object;Bearer storage-token"
+} -run
+
+# HTTP/2 clients, whose requests are always in absolute form
+client c2 -connect ${h1_feh2_sock} {
+    txpri
+    stream 0 {
+        txsettings
+        rxsettings
+        txsettings -ack
+        rxsettings
+        expect settings.ack == true
+    } -run
+
+    stream 1 {
+        txreq -req GET -scheme https -url "/bucket/object" -hdr ":authority" "client.example.com" \
+            -hdr "authorization" "Bearer client"
+        rxhdrs
+        expect resp.status == 200
+        rxdata -all
+        expect resp.body == "1.1;storage.example.com;/bucket/object;Bearer storage-token"
+    } -run
+
+    stream 3 {
+        txreq -req GET -scheme https -url "/h2/bucket/object" -hdr ":authority" "client.example.com"
+        rxhdrs
+        expect resp.status == 200
+        rxdata -all
+        expect resp.body == "2.0;storage.example.com;https://storage.example.com/bucket/object;Bearer storage-token"
+    } -run
+} -run

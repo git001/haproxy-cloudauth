@@ -33,6 +33,7 @@ haproxy h2 -conf {
         timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
     frontend s3
         bind "fd@${s3}"
+        bind "fd@${s3h2}" proto h2
         http-request set-var(txn.date) req.hdr(x-amz-date)
         http-request set-var(txn.day) var(txn.date),bytes(0,8)
         http-request set-var(txn.region) req.hdr(x-test-region)
@@ -112,6 +113,7 @@ haproxy h1 -conf {
         use_backend be_parts if { path_beg /parts/ }
         use_backend be_ovh if { path_beg /ovh/ }
         use_backend be_stackit if { path_beg /stackit/ }
+        use_backend be_h2 if { path_beg /h2/ }
         default_backend be_s3
     backend be_s3
         filter-config cloudauth enabled profile s3 host localhost
@@ -123,6 +125,11 @@ haproxy h1 -conf {
         http-request set-path %[path,regsub(^/ovh,)]
         filter-config cloudauth enabled profile ovh host mybucket.s3.gra.io.cloud.ovh.net
         server srv ipv4@localhost:${h2_s3_port}
+    # HTTP/2 to the storage, the Host header being sent as the authority
+    backend be_h2
+        http-request set-path %[path,regsub(^/h2,)]
+        filter-config cloudauth enabled profile s3 host localhost
+        server srv ipv4@localhost:${h2_s3h2_port} proto h2
     backend be_stackit
         http-request set-path %[path,regsub(^/stackit,/mybucket)]
         filter-config cloudauth enabled profile stackit host object.storage.eu01.onstackit.cloud
@@ -165,6 +172,13 @@ client c1 -connect ${h1_fe_sock} {
     txreq -url "/ovh/photos/a.jpg" -hdr "Host: client.example.com" \
         -hdr "x-test-uri: /photos/a.jpg" -hdr "x-test-query: " \
         -hdr "x-test-region: gra" -hdr "x-test-host: mybucket.s3.gra.io.cloud.ovh.net"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "AKIAIOSFODNN7EXAMPLE;"
+
+    txreq -url "/h2/bucket/object" -hdr "Host: client.example.com" \
+        -hdr "x-test-uri: /bucket/object" -hdr "x-test-query: " \
+        -hdr "x-test-region: us-east-1" -hdr "x-test-host: localhost"
     rxresp
     expect resp.status == 200
     expect resp.body == "AKIAIOSFODNN7EXAMPLE;"

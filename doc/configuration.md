@@ -249,11 +249,49 @@ backend storage
 ```
 
 See also: `filter-config`, `filter-enable`, `retry-on`, `option redispatch`
+and `expose-experimental-directives` in the configuration manual of HAProxy.
+
+### Writes and uploads
+
+The writes (`PUT`, `POST`, `DELETE`...) are authenticated like the reads, with
+the same credential, so the methods the clients may use are only limited by the
+HTTP rules and by the permissions of the credential. A read-only access is best
+enforced on both sides, with a credential which only grants the reads, and a
+rule rejecting the other methods:
 
 ```
-and "expose-experimental-directives" in the configuration manual
-of HAProxy.
+http-request deny unless METH_GET or METH_HEAD
 ```
+
+The payload of the writes is forwarded as received, and is not part of the
+signatures (see `signer` in section 3). The following points should be
+considered with the writes:
+
+- Amazon S3 and Azure Blob Storage require a `Content-Length` header with the
+    uploads, and do not accept the chunked transfer coding, which HAProxy uses
+    towards the HTTP/1.1 servers when an HTTP/2 or HTTP/3 client sends a
+    payload without `Content-Length`. Such requests may be rejected early, for
+    instance:
+
+    ```
+    http-request return status 411 if METH_PUT !{ req.hdr(content-length) -m found }
+    ```
+
+- the L7 retries (`retry-on` with other conditions than `conn-failure`) only
+    apply to the requests fitting in a buffer (see `tune.bufsize`), so the
+    large uploads are not retried;
+
+- the multipart uploads of Amazon S3 and the uploads by blocks of Azure Blob
+    Storage are made of several requests, each one authenticated on its own,
+    and their query string parameters (`uploads`, `uploadId`, `partNumber`,
+    `comp`, `blockid`...) are kept and signed;
+
+- the resumable uploads of Google Cloud Storage return the URI of the upload
+    session in the `Location` header of the response. This URI designates the
+    storage itself, and grants the access to the upload session without any
+    other credential, so a client following it sends the next requests
+    directly to the storage. When they must go through HAProxy, the header may
+    be rewritten with `http-response replace-header Location`.
 
 ## 3. Credential profiles
 

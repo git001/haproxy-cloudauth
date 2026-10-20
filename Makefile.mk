@@ -48,6 +48,12 @@ ifneq ($(CLOUDAUTH_S3:0=),)
 OPTIONS_OBJS += $(CLOUDAUTH_DIR)/src/cloudauth_s3.o
 endif
 
+# The HAProxy Makefile rebuilds an object when one of the HAProxy headers
+# changes (include/*/*.h of HAProxy), but not when a header of the filter
+# changes. The headers of the filter are therefore added as prerequisites of
+# the objects of the filter. A rule without a recipe only adds prerequisites.
+$(filter $(CLOUDAUTH_DIR)/%,$(OPTIONS_OBJS)): $(wildcard $(CLOUDAUTH_DIR)/include/cloudauth/*.h)
+
 # The addon is not part of the "use_opts" list of HAProxy, so its flags are
 # not collected automatically. This fragment is included before COPTS is
 # assembled.

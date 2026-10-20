@@ -565,8 +565,10 @@ int cloudauth_sign_bearer(const struct cloudauth_profile *prof, struct htx *htx)
 
 /* Authenticates the request in <htx> of the stream <strm> with the credential
  * of profile <prof>. The headers which may carry credentials must have been
- * removed first. Returns 0 on success, otherwise -1 with <reason> set to a
- * static string describing the failure, which never contains the credential.
+ * removed first. Returns 0 on success, otherwise -1 if the request could not
+ * be authenticated, or -2 if the request as sent by the client cannot be
+ * authenticated, with <reason> set to a static string describing the failure,
+ * which never contains the credential.
  */
 int cloudauth_sign_request(struct cloudauth_profile *prof, const struct stream *strm, struct htx *htx,
                            const char **reason)
@@ -610,17 +612,16 @@ int cloudauth_sign_request(struct cloudauth_profile *prof, const struct stream *
 }
 
 /* The headers which may carry credentials for a cloud storage, and the ones
- * set by the signers, whatever the provider. The other headers specific to a
+ * set by the signers, whatever the provider, except the hashes of the payload,
+ * which the sigv4 signer replaces itself. The other headers specific to a
  * storage are kept and signed when the signer covers them, the HTTP rules
  * being in charge of removing the ones the clients must not use.
  */
 static const struct ist cloudauth_cred_hdrs[] = {
 	IST("authorization"),
 	IST("x-auth-token"),
-	IST("x-amz-content-sha256"),
 	IST("x-amz-date"),
 	IST("x-amz-security-token"),
-	IST("x-goog-content-sha256"),
 	IST("x-goog-date"),
 	IST("x-ms-copy-source-authorization"),
 	IST("x-ms-date"),
@@ -779,8 +780,9 @@ static int cloudauth_set_host(struct htx *htx, const struct ist host)
 /* Authenticates the request in <htx> of stream <strm> with profile <prof>:
  * the headers and the query string parameters which may carry credentials are
  * removed, the Host header is set to <host>, then the request is signed.
- * Returns 0 on success, otherwise -1 with <reason> set to a static string
- * describing the failure.
+ * Returns 0 on success, otherwise -1 if the request could not be
+ * authenticated, or -2 if the request as sent by the client cannot be
+ * authenticated, with <reason> set to a static string describing the failure.
  */
 int cloudauth_authenticate(struct cloudauth_profile *prof, struct ist host, struct stream *strm,
                            struct htx *htx, const char **reason)

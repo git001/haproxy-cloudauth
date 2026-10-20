@@ -82,10 +82,11 @@ rules of the frontend and of the backend and after the other filters, in this
 order:
 
 - the headers which may carry credentials, and the ones set by the signers,
-    are removed: `Authorization`, `X-Auth-Token`, `X-Amz-Content-Sha256`,
-    `X-Amz-Date`, `X-Amz-Security-Token`, `X-Goog-Content-Sha256`,
-    `X-Goog-Date`, `X-Ms-Copy-Source-Authorization`, `X-Ms-Date` and
-    `X-Ms-Version`. This way, a client cannot use its own credentials, nor
+    are removed: `Authorization`, `X-Auth-Token`, `X-Amz-Date`,
+    `X-Amz-Security-Token`, `X-Goog-Date`, `X-Ms-Copy-Source-Authorization`,
+    `X-Ms-Date` and `X-Ms-Version`. The hashes of the payload,
+    `X-Amz-Content-Sha256` and `X-Goog-Content-Sha256`, are replaced by the
+    `sigv4` signer. This way, a client cannot use its own credentials, nor
     interfere with the ones added by HAProxy. The other headers of the
     storages, starting with `X-Amz-`, `X-Ms-` or `X-Goog-`, are kept, and
     signed when the signer covers them (see `signer` in section 3);
@@ -176,7 +177,10 @@ error of the backend, which may be customized with `errorfile` or
 internal error during the request processing). The reason is stored in the
 `txn.cloudauth.error` variable, which may be logged as well. Note that the
 health checks are not authenticated, so they do not detect such an issue, but
-the state changes of the credentials are logged (see section 1).
+the state changes of the credentials are logged (see section 1). A request
+which cannot be authenticated as sent by the client, such as a chunked payload
+signed by the client (see `signer sigv4`), is rejected with the 400 error
+instead, and logged with the termination state `PR`.
 
 ```
 backend storage
@@ -594,8 +598,19 @@ supported types are:
     client, within the credential scope made of the day, the region (see
     `region`) and the service. The payload is not signed
     (`UNSIGNED-PAYLOAD`), since the request is signed before its payload is
-    forwarded, so it should be protected by TLS. The access key identifier is
-    not a secret, but the token is, like any other one.
+    forwarded, so it should be protected by TLS. With `provider s3`, the
+    chunked payloads with an unsigned trailer of the AWS SDKs
+    (`Content-Encoding: aws-chunked` and
+    `x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER`), which carry
+    a checksum of the payload in their trailer, are signed as such, with their
+    `x-amz-decoded-content-length` and `x-amz-trailer` headers. The other
+    chunked payloads (`x-amz-content-sha256: STREAMING-...`) are rejected with
+    a 400 error, since their chunks are signed with the signature of the
+    request, which HAProxy replaces. A client may then be configured to send
+    the checksums in headers instead, with the
+    `request_checksum_calculation = when_required` setting of the AWS SDKs.
+    The access key identifier is not a secret, but the token is, like any
+    other one.
 
 ### token
 

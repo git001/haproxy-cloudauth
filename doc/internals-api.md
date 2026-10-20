@@ -368,13 +368,22 @@ and the hash of the canonical request of each request. The fields of
 - service, request: the service and the request type of the credential scope,
     such as `s3` and `aws4_request`;
 
-- region: the region used without `region`, or NULL if it is mandatory.
+- region: the region used without `region`, or NULL if it is mandatory;
+
+- unsigned_trailer: non-zero if the storage accepts the chunked payloads with
+    an unsigned trailer (`STREAMING-UNSIGNED-PAYLOAD-TRAILER`), whose hash sent
+    by the client is then kept.
 
 The signed headers are the Host header and all the headers starting with
 hdr_pfx, the ones of the client as well as the ones added by the signer.
 The path and the query string are URL-decoded then encoded again with only the
 unreserved characters of RFC 3986, the parameters being sorted once encoded, at
 most `CLOUDAUTH_SIGV4_MAX_PARAMS`. The payload is not signed
-(`UNSIGNED-PAYLOAD`), since it is not known yet when the request is signed. The
+(`UNSIGNED-PAYLOAD`), since it is not known yet when the request is signed.
+The hash header of the client is always replaced, and a request whose hash is
+the one of another chunked payload, whose chunks are signed with the signature
+of the request, is rejected: `cloudauth_sigv4_sign()` then returns -2, which
+the filter reports to the client with a 400 error, while -1 is a failure of
+HAProxy, reported with a 503 error. The
 secret, the signing key, the canonical request, which may carry the session
 token, and the Authorization header are wiped once the request is signed.

@@ -58,6 +58,7 @@ static const struct cloudauth_sigv4 cloudauth_s3_sigv4 = {
 	.service    = "s3",
 	.request    = "aws4_request",
 	.region     = NULL,
+	.unsigned_trailer = 1,
 };
 
 /* Returns the S3 settings of profile <prof> */

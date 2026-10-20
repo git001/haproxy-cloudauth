@@ -21,7 +21,8 @@ setenv AWS_SESSION_TOKEN IQoJb3JpZ2luX2VjEXAMPLE+/PARTS=
 # identifier, derived from the secret prefixed by "AWS4" (in base64 below).
 # The session token is signed when present, and the "x-amz-meta-*" and
 # "x-amz-storage-class" headers of the client when present, with their
-# canonical values. The Host header must be the expected one when given by
+# canonical values. A chunked payload with an unsigned trailer keeps its hash
+# and its content coding, and its headers are signed. The Host header must be the expected one when given by
 # the client.
 haproxy h2 -conf {
     global
@@ -52,10 +53,13 @@ haproxy h2 -conf {
         http-request set-var(txn.signed) str(host;x-amz-content-sha256;x-amz-date;x-amz-security-token) if { req.hdr(x-amz-security-token) -m found }
         http-request set-var-fmt(txn.creq) "%[method]\n%[req.hdr(x-test-uri)]\n%[req.hdr(x-test-query)]\nhost:%[req.hdr(host)]\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:%[var(txn.date)]\nx-amz-meta-color:blue green\nx-amz-meta-tag:a,b\nx-amz-storage-class:STANDARD_IA\n\nhost;x-amz-content-sha256;x-amz-date;x-amz-meta-color;x-amz-meta-tag;x-amz-storage-class\nUNSIGNED-PAYLOAD" if { req.hdr(x-amz-meta-color) -m found }
         http-request set-var(txn.signed) str(host;x-amz-content-sha256;x-amz-date;x-amz-meta-color;x-amz-meta-tag;x-amz-storage-class) if { req.hdr(x-amz-meta-color) -m found }
+        http-request set-var-fmt(txn.creq) "%[method]\n%[req.hdr(x-test-uri)]\n%[req.hdr(x-test-query)]\nhost:%[req.hdr(host)]\nx-amz-content-sha256:STREAMING-UNSIGNED-PAYLOAD-TRAILER\nx-amz-date:%[var(txn.date)]\nx-amz-decoded-content-length:5\nx-amz-trailer:x-amz-checksum-crc32\n\nhost;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-trailer\nSTREAMING-UNSIGNED-PAYLOAD-TRAILER" if { req.hdr(x-amz-trailer) -m found }
+        http-request set-var(txn.signed) str(host;x-amz-content-sha256;x-amz-date;x-amz-decoded-content-length;x-amz-trailer) if { req.hdr(x-amz-trailer) -m found }
+        http-request return status 400 content-type text/plain string "bad content coding" if { req.hdr(x-amz-trailer) -m found } !{ req.hdr(content-encoding) -m str aws-chunked }
         http-request set-var-fmt(txn.sts) "AWS4-HMAC-SHA256\n%[var(txn.date)]\n%[var(txn.day)]/%[var(txn.region)]/s3/aws4_request\n%[var(txn.creq),sha2(256),hex,lower]"
         http-request set-var(txn.sig) var(txn.sts),hmac(sha256,txn.k4),hex,lower
         http-request set-var-fmt(txn.auth) "AWS4-HMAC-SHA256 Credential=%[var(txn.id)]/%[var(txn.day)]/%[var(txn.region)]/s3/aws4_request, SignedHeaders=%[var(txn.signed)], Signature=%[var(txn.sig)]"
-        http-request return status 400 content-type text/plain string "bad headers" unless { req.hdr(x-amz-date) -m reg ^[0-9]{8}T[0-9]{6}Z$ } { req.hdr(x-amz-content-sha256) -m str UNSIGNED-PAYLOAD } { req.hdr_cnt(x-amz-date) -m int 1 } { req.fhdr_cnt(authorization) -m int 1 } !{ req.hdr(x-amz-acl) -m found }
+        http-request return status 400 content-type text/plain string "bad headers" unless { req.hdr(x-amz-date) -m reg ^[0-9]{8}T[0-9]{6}Z$ } { req.hdr(x-amz-content-sha256) -m str UNSIGNED-PAYLOAD STREAMING-UNSIGNED-PAYLOAD-TRAILER } { req.hdr_cnt(x-amz-content-sha256) -m int 1 } { req.hdr_cnt(x-amz-date) -m int 1 } { req.fhdr_cnt(authorization) -m int 1 } !{ req.hdr(x-amz-acl) -m found }
         http-request return status 200 content-type text/plain lf-string "%[var(txn.id)];%[req.hdr(x-amz-security-token)]" if { req.fhdr(authorization),strcmp(txn.auth) eq 0 }
         http-request return status 403 content-type text/plain lf-string "%[var(txn.creq)]"
 } -start
@@ -176,6 +180,16 @@ client c1 -connect ${h1_fe_sock} {
     expect resp.status == 200
     expect resp.body == "AKIAIOSFODNN7EXAMPLE;"
 
+    # a chunked payload of the AWS SDKs with an unsigned checksum trailer
+    txreq -req PUT -url "/bucket/object" -hdr "x-test-uri: /bucket/object" -hdr "x-test-query: " \
+        -hdr "x-test-region: us-east-1" -hdr "Content-Encoding: aws-chunked" \
+        -hdr "x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER" \
+        -hdr "x-amz-decoded-content-length: 5" -hdr "x-amz-trailer: x-amz-checksum-crc32" \
+        -body "5\r\nhello\r\n0\r\nx-amz-checksum-crc32:NhCmhg==\r\n\r\n"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "AKIAIOSFODNN7EXAMPLE;"
+
     txreq -url "/h2/bucket/object" -hdr "Host: client.example.com" \
         -hdr "x-test-uri: /bucket/object" -hdr "x-test-query: " \
         -hdr "x-test-region: us-east-1" -hdr "x-test-host: localhost"
@@ -189,6 +203,16 @@ client c1 -connect ${h1_fe_sock} {
     rxresp
     expect resp.status == 200
     expect resp.body == "AKIAIOSFODNN7EXAMPLE;"
+} -run
+
+# a chunked payload whose chunks are signed with the signature of the client,
+# which HAProxy cannot provide, is rejected as an invalid request
+client c4 -connect ${h1_fe_sock} {
+    txreq -req PUT -url "/bucket/object" -hdr "Content-Encoding: aws-chunked" \
+        -hdr "x-amz-content-sha256: STREAMING-AWS4-HMAC-SHA256-PAYLOAD" \
+        -hdr "x-amz-decoded-content-length: 5" -body "5;chunk-signature=0\r\nhello\r\n"
+    rxresp
+    expect resp.status == 400
 } -run
 
 # a canonical request which does not fit in a buffer, see h1
@@ -225,6 +249,11 @@ haproxy h1 -cli {
 haproxy h1 -cli {
     send "show events buf0"
     expect ~ "sigv4 canonical request hash : profile=s3 \\([0-9a-f]{64}\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "request not authenticated : profile=s3 \\(the chunked payloads signed by the client are not supported\\)"
 }
 
 haproxy h1 -cli {

@@ -42,6 +42,7 @@ struct cloudauth_sigv4 {
 	const char *service;            /* service of the credential scope: "s3", "storage" */
 	const char *request;            /* request type of the credential scope: "aws4_request", "goog4_request" */
 	const char *region;             /* region used without "region", or NULL if it is mandatory */
+	int unsigned_trailer;           /* accepts the chunked payloads with an unsigned trailer */
 };
 
 #endif /* _CLOUDAUTH_SIGV4_T_H */

@@ -138,8 +138,9 @@ static int cloudauth_flt_attach(struct stream *s, struct filter *filter)
 }
 
 /* Authenticates the request once its headers were analyzed. On failure, the
- * request is rejected with a 503 before any connection to a server. Returns 1
- * on success, otherwise -1.
+ * request is rejected before any connection to a server, with a 400 if it
+ * cannot be authenticated as sent by the client, otherwise with a 503.
+ * Returns 1 on success, otherwise -1.
  */
 static int cloudauth_flt_http_headers(struct stream *s, struct filter *filter,
                                       struct http_msg *msg)
@@ -147,20 +148,26 @@ static int cloudauth_flt_http_headers(struct stream *s, struct filter *filter,
 	struct cloudauth_flt_conf *conf = FLT_CONF(filter);
 	struct htx *htx = htxbuf(&msg->chn->buf);
 	const char *reason;
+	int ret;
 
 	if (msg->chn->flags & CF_ISRESP)
 		return 1;
 
-	if (cloudauth_authenticate(conf->profile, ist(conf->host), s, htx, &reason) < 0) {
+	ret = cloudauth_authenticate(conf->profile, ist(conf->host), s, htx, &reason);
+	if (ret < 0) {
 		cloudauth_count_request(s->be, 1);
 		cloudauth_set_error(s, conf->profile, reason);
+		/* a request which cannot be authenticated as sent by the client
+		 * is rejected as an invalid one, the other failures are the
+		 * ones of HAProxy.
+		 */
 		if (!(s->flags & SF_ERR_MASK))
-			s->flags |= SF_ERR_INTERNAL;
+			s->flags |= (ret == -2) ? SF_ERR_PRXCOND : SF_ERR_INTERNAL;
 		/* When a filter fails with a status set, HAProxy closes the
 		 * stream without any response, so the error message is sent
 		 * here. It is already forwarded once HAProxy closes the stream.
 		 */
-		s->txn.http->status = 503;
+		s->txn.http->status = (ret == -2) ? 400 : 503;
 		http_reply_and_close(s, s->txn.http->status, http_error_message(s));
 		return -1;
 	}

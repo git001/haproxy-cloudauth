@@ -32,6 +32,14 @@
 /* The hash of the payload of the signed requests, which is not signed */
 #define CLOUDAUTH_SIGV4_UNSIGNED_PAYLOAD "UNSIGNED-PAYLOAD"
 
+/* The hash of a chunked payload ("aws-chunked" content coding) whose chunks
+ * and trailer are not signed, sent by the AWS SDKs to add a checksum trailer.
+ */
+#define CLOUDAUTH_SIGV4_UNSIGNED_TRAILER "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
+
+/* The prefix of the hashes of the chunked payloads */
+#define CLOUDAUTH_SIGV4_STREAMING "STREAMING-"
+
 /* Splits the token of the sigv4 signer, "<access-key-id>:<secret>" or
  * "<access-key-id>:<secret>:<session-token>" for a temporary key, into <id>,
  * <secret> and <session>, which is empty for a permanent key. Returns 0 on
@@ -262,14 +270,38 @@ static int cloudauth_sigv4_add_signed_hdrs(struct buffer *out, const struct clou
 	return 0;
 }
 
+/* Removes the hash headers of the variant <v4> sent by the client from the
+ * request in <htx>, and returns the hash of the payload to sign: the one of a
+ * chunked payload with an unsigned trailer if the client sent it and the
+ * variant accepts it, otherwise "UNSIGNED-PAYLOAD". Returns IST_NULL if the
+ * client sent the hash of another chunked payload, whose chunks are signed
+ * with the signature of the request, which HAProxy cannot provide.
+ */
+static struct ist cloudauth_sigv4_payload_hash(struct htx *htx, const struct cloudauth_sigv4 *v4)
+{
+	struct ist hash = ist(CLOUDAUTH_SIGV4_UNSIGNED_PAYLOAD);
+	struct http_hdr_ctx ctx;
+	int invalid = 0;
+
+	ctx.blk = NULL;
+	while (http_find_header(htx, v4->hash_hdr, &ctx, 1)) {
+		if (v4->unsigned_trailer && isteq(ctx.value, ist(CLOUDAUTH_SIGV4_UNSIGNED_TRAILER)))
+			hash = ist(CLOUDAUTH_SIGV4_UNSIGNED_TRAILER);
+		else if (istmatch(ctx.value, ist(CLOUDAUTH_SIGV4_STREAMING)))
+			invalid = 1;
+		http_remove_header(htx, &ctx);
+	}
+	return invalid ? IST_NULL : hash;
+}
+
 /* Appends to <out> the canonical request of the request in <htx>, whose <nb>
- * signed headers are <hdrs>: the method, the canonical URI, the canonical
- * query string, the signed headers with their values, the list of the signed
- * headers, and the hash of the payload, one per line. Returns 0 on success,
- * -1 on failure.
+ * signed headers are <hdrs> and the hash of the payload <hash>: the method,
+ * the canonical URI, the canonical query string, the signed headers with their
+ * values, the list of the signed headers, and the hash of the payload, one per
+ * line. Returns 0 on success, -1 on failure.
  */
 static int cloudauth_sigv4_add_creq(struct buffer *out, struct htx *htx, const struct cloudauth_hdr *hdrs,
-                                    int nb)
+                                    int nb, const struct ist hash)
 {
 	struct buffer *work1 = NULL, *work2 = NULL;
 	struct htx_sl *sl;
@@ -313,7 +345,7 @@ static int cloudauth_sigv4_add_creq(struct buffer *out, struct htx *htx, const s
 		goto out;
 	if (!chunk_memcat(out, "\n", 1))
 		goto out;
-	if (!chunk_strcat(out, CLOUDAUTH_SIGV4_UNSIGNED_PAYLOAD))
+	if (!chunk_istcat(out, hash))
 		goto out;
 	ret = 0;
 
@@ -365,18 +397,22 @@ static int cloudauth_sigv4_signing_key(const struct ist secret, const struct ist
 
 /* Signs the request in <htx> with the HMAC key of profile <prof>, with the
  * variant <v4> of Signature Version 4: the headers carrying the hash of the
- * payload ("UNSIGNED-PAYLOAD") and the date are added, then the
+ * payload, "UNSIGNED-PAYLOAD" or the one of a chunked payload with an unsigned
+ * trailer, and the date are added, then the
  * "Authorization: <algorithm> Credential=<access-key-id>/<scope>,
  * SignedHeaders=<headers>, Signature=<signature>" header, the signature being
  * the hexadecimal HMAC-SHA256 of the string to sign with the signing key of
  * the day. The session token of a temporary key is sent and signed in its own
- * header. The client headers carrying the prefix of the variant and the
- * Authorization header were removed, and the Host header was set. The lock of
- * the profile must be held. The scope, the signed headers and the hash of the
+ * header. The hash header of the client is replaced (see
+ * cloudauth_sigv4_payload_hash()), the client headers which may carry
+ * credentials were removed, and the Host header was set. The lock of the
+ * profile must be held. The scope, the signed headers and the hash of the
  * canonical request are traced for the stream <strm>, so that they may be
  * compared with the ones of the storage when it rejects the signature: none
  * of them reveals the key, nor the session token. Returns 0 on success,
- * otherwise -1 with <reason> set to a static string describing the failure.
+ * otherwise -1 if the request could not be signed, or -2 if the request as
+ * sent by the client cannot be signed, with <reason> set to a static string
+ * describing the failure.
  */
 int cloudauth_sigv4_sign(const struct cloudauth_profile *prof, const struct stream *strm, struct htx *htx,
                          const struct cloudauth_sigv4 *v4, const char **reason)
@@ -388,7 +424,7 @@ int cloudauth_sigv4_sign(const struct cloudauth_profile *prof, const struct stre
 	char stamp[CLOUDAUTH_SIGV4_DATE_SIZE];
 	struct cloudauth_hdr hdrs[CLOUDAUTH_MAX_SIGNED_HDRS];
 	struct buffer *creq = NULL, *sts = NULL, *auth = NULL;
-	struct ist id, secret, session, day, detail;
+	struct ist id, secret, session, day, detail, hash;
 	struct tm tm;
 	size_t len;
 	int nb, ret = -1;
@@ -412,8 +448,15 @@ int cloudauth_sigv4_sign(const struct cloudauth_profile *prof, const struct stre
 	}
 	day = ist2(stamp, 8);
 
+	hash = cloudauth_sigv4_payload_hash(htx, v4);
+	if (!isttest(hash)) {
+		*reason = "the chunked payloads signed by the client are not supported";
+		ret = -2;
+		goto out;
+	}
+
 	*reason = "cannot add the sigv4 headers";
-	if (!http_add_header(htx, v4->hash_hdr, ist(CLOUDAUTH_SIGV4_UNSIGNED_PAYLOAD), 0))
+	if (!http_add_header(htx, v4->hash_hdr, hash, 0))
 		goto out;
 	if (!http_add_header(htx, v4->date_hdr, ist(stamp), 0))
 		goto out;
@@ -444,7 +487,7 @@ int cloudauth_sigv4_sign(const struct cloudauth_profile *prof, const struct stre
 		goto out;
 
 	*reason = "the canonical request does not fit in a buffer";
-	if (cloudauth_sigv4_add_creq(creq, htx, hdrs, nb) < 0)
+	if (cloudauth_sigv4_add_creq(creq, htx, hdrs, nb, hash) < 0)
 		goto out;
 	*reason = "cannot compute the signature";
 	if (!EVP_Digest(creq->area, creq->data, mac, NULL, EVP_sha256(), NULL))

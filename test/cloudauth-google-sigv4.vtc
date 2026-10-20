@@ -37,6 +37,8 @@ haproxy h2 -conf {
         http-request set-var-fmt(txn.creq) "%[method]\n%[req.hdr(x-test-uri)]\n%[req.hdr(x-test-query)]\nhost:%[req.hdr(host)]\nx-goog-content-sha256:UNSIGNED-PAYLOAD\nx-goog-date:%[var(txn.date)]\n\nhost;x-goog-content-sha256;x-goog-date\nUNSIGNED-PAYLOAD"
         http-request set-var-fmt(txn.creq) "%[method]\n%[req.hdr(x-test-uri)]\n%[req.hdr(x-test-query)]\nhost:%[req.hdr(host)]\nx-goog-content-sha256:UNSIGNED-PAYLOAD\nx-goog-date:%[var(txn.date)]\nx-goog-meta-color:blue green\n\nhost;x-goog-content-sha256;x-goog-date;x-goog-meta-color\nUNSIGNED-PAYLOAD" if { req.hdr(x-goog-meta-color) -m found }
         http-request set-var(txn.signed) str(host;x-goog-content-sha256;x-goog-date;x-goog-meta-color) if { req.hdr(x-goog-meta-color) -m found }
+        http-request set-var-fmt(txn.creq) "%[method]\n%[req.hdr(x-test-uri)]\n%[req.hdr(x-test-query)]\nhost:%[req.hdr(host)]\nx-goog-content-sha256:UNSIGNED-PAYLOAD\nx-goog-date:%[var(txn.date)]\nx-goog-resumable:start\n\nhost;x-goog-content-sha256;x-goog-date;x-goog-resumable\nUNSIGNED-PAYLOAD" if { req.hdr(x-goog-resumable) -m found }
+        http-request set-var(txn.signed) str(host;x-goog-content-sha256;x-goog-date;x-goog-resumable) if { req.hdr(x-goog-resumable) -m found }
         http-request set-var-fmt(txn.sts) "GOOG4-HMAC-SHA256\n%[var(txn.date)]\n%[var(txn.day)]/%[var(txn.region)]/storage/goog4_request\n%[var(txn.creq),sha2(256),hex,lower]"
         http-request set-var(txn.sig) var(txn.sts),hmac(sha256,txn.k4),hex,lower
         http-request set-var-fmt(txn.auth) "GOOG4-HMAC-SHA256 Credential=%[var(txn.id)]/%[var(txn.day)]/%[var(txn.region)]/storage/goog4_request, SignedHeaders=%[var(txn.signed)], Signature=%[var(txn.sig)]"
@@ -106,6 +108,18 @@ client c1 -connect ${h1_fe_sock} {
     # a write: the headers of the client are signed
     txreq -req PUT -url "/bucket/object" -hdr "x-test-uri: /bucket/object" -hdr "x-test-query: " \
         -hdr "x-test-region: auto" -hdr "x-goog-meta-color: blue  green" -body "hello"
+    rxresp
+    expect resp.status == 200
+
+    # the start of a resumable upload of the XML API, then an upload to the
+    # session, whose identifier is kept and signed
+    txreq -req POST -url "/bucket/object" -hdr "x-test-uri: /bucket/object" -hdr "x-test-query: " \
+        -hdr "x-test-region: auto" -hdr "x-goog-resumable: start"
+    rxresp
+    expect resp.status == 200
+
+    txreq -req PUT -url "/bucket/object?upload_id=ADPycds" -hdr "x-test-uri: /bucket/object" \
+        -hdr "x-test-query: upload_id=ADPycds" -hdr "x-test-region: auto" -body "hello"
     rxresp
     expect resp.status == 200
 } -run

@@ -180,6 +180,30 @@ client c1 -connect ${h1_fe_sock} {
     expect resp.status == 200
     expect resp.body == "AKIAIOSFODNN7EXAMPLE;"
 
+    # a multipart upload: creation, upload of a part, completion, then the
+    # object is deleted. The parameters are kept and signed, an empty value
+    # being signed as such.
+    txreq -req POST -url "/bucket/object?uploads" -hdr "x-test-uri: /bucket/object" \
+        -hdr "x-test-query: uploads=" -hdr "x-test-region: us-east-1"
+    rxresp
+    expect resp.status == 200
+
+    txreq -req PUT -url "/bucket/object?uploadId=abc&partNumber=1" -hdr "x-test-uri: /bucket/object" \
+        -hdr "x-test-query: partNumber=1&uploadId=abc" -hdr "x-test-region: us-east-1" -body "hello"
+    rxresp
+    expect resp.status == 200
+
+    txreq -req POST -url "/bucket/object?uploadId=abc" -hdr "x-test-uri: /bucket/object" \
+        -hdr "x-test-query: uploadId=abc" -hdr "x-test-region: us-east-1" \
+        -body "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber></Part></CompleteMultipartUpload>"
+    rxresp
+    expect resp.status == 200
+
+    txreq -req DELETE -url "/bucket/object" -hdr "x-test-uri: /bucket/object" -hdr "x-test-query: " \
+        -hdr "x-test-region: us-east-1"
+    rxresp
+    expect resp.status == 200
+
     # a chunked payload of the AWS SDKs with an unsigned checksum trailer
     txreq -req PUT -url "/bucket/object" -hdr "x-test-uri: /bucket/object" -hdr "x-test-query: " \
         -hdr "x-test-region: us-east-1" -hdr "Content-Encoding: aws-chunked" \

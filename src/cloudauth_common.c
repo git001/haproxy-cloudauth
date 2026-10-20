@@ -371,6 +371,109 @@ int cloudauth_qparam_cmp(const void *a, const void *b)
 	return istdiff(pa->value, pb->value);
 }
 
+/* Inserts the header found in <ctx> into the <nb> headers <hdrs> sorted by
+ * name, after the ones of a lower or equal name, so that the headers of a same
+ * name keep their order. <hdrs> must have room for one more header.
+ */
+static void cloudauth_insert_hdr(const struct htx *htx, const struct http_hdr_ctx *ctx,
+                                 struct cloudauth_hdr *hdrs, int nb)
+{
+	struct ist name = htx_get_blk_name(htx, ctx->blk);
+	int i;
+
+	for (i = nb; i > 0 && istdiff(hdrs[i - 1].name, name) > 0; i--)
+		hdrs[i] = hdrs[i - 1];
+	hdrs[i].name = name;
+	hdrs[i].value = ctx->value;
+}
+
+/* Collects into <hdrs>, which has room for <max> entries, the headers of the
+ * request in <htx> named <name> or whose name starts with <pfx>, one of them
+ * being IST_NULL if not used. The names are in lower case in HTX. The headers
+ * are sorted by name, the ones of a same name keeping their order, as expected
+ * by the canonical headers of the signatures. Returns the number of headers,
+ * or -1 if there are more than <max> of them.
+ */
+int cloudauth_collect_hdrs(struct htx *htx, const struct ist name, const struct ist pfx,
+                           struct cloudauth_hdr *hdrs, int max)
+{
+	struct http_hdr_ctx ctx;
+	int nb = 0;
+
+	ctx.blk = NULL;
+	while (isttest(name) && http_find_header(htx, name, &ctx, 1)) {
+		if (nb == max)
+			return -1;
+		cloudauth_insert_hdr(htx, &ctx, hdrs, nb++);
+	}
+	ctx.blk = NULL;
+	while (isttest(pfx) && http_find_pfx_header(htx, pfx, &ctx, 1)) {
+		if (nb == max)
+			return -1;
+		cloudauth_insert_hdr(htx, &ctx, hdrs, nb++);
+	}
+	return nb;
+}
+
+/* Appends to <out> the canonical form of the header value <value>: without
+ * its leading and trailing spaces and tabs, each sequence of them inside being
+ * replaced by a single space. Returns 0 on success, -1 if there is no more
+ * room.
+ */
+static int cloudauth_canon_value_cat(struct buffer *out, struct ist value)
+{
+	int space = 0;
+	size_t i;
+
+	value = http_trim_trailing_spht(http_trim_leading_spht(value));
+	for (i = 0; i < istlen(value); i++) {
+		char c = istptr(value)[i];
+
+		if (HTTP_IS_SPHT(c)) {
+			space = 1;
+			continue;
+		}
+		if (space) {
+			if (!chunk_memcat(out, " ", 1))
+				return -1;
+			space = 0;
+		}
+		if (!chunk_memcat(out, &c, 1))
+			return -1;
+	}
+	return 0;
+}
+
+/* Appends to <out> the canonical headers of the <nb> headers <hdrs> sorted by
+ * cloudauth_collect_hdrs(): one line "<name>:<values>" per name, ended by a
+ * line feed, the canonical values of a same name being separated by commas.
+ * Returns 0 on success, -1 if there is no more room.
+ */
+int cloudauth_canon_hdrs_cat(struct buffer *out, const struct cloudauth_hdr *hdrs, int nb)
+{
+	int i;
+
+	for (i = 0; i < nb; i++) {
+		if (i && isteq(hdrs[i].name, hdrs[i - 1].name)) {
+			if (!chunk_memcat(out, ",", 1))
+				return -1;
+		}
+		else {
+			if (i && !chunk_memcat(out, "\n", 1))
+				return -1;
+			if (!chunk_istcat(out, hdrs[i].name))
+				return -1;
+			if (!chunk_memcat(out, ":", 1))
+				return -1;
+		}
+		if (cloudauth_canon_value_cat(out, hdrs[i].value) < 0)
+			return -1;
+	}
+	if (nb && !chunk_memcat(out, "\n", 1))
+		return -1;
+	return 0;
+}
+
 /* Appends to <out> the URL-encoded copy of <in>, as a query string parameter
  * or a form field: only the unreserved characters of RFC 3986 are kept.
  * Returns 0 on success, -1 if there is no more room.

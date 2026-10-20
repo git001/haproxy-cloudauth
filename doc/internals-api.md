@@ -286,6 +286,13 @@ The helpers shared by the providers are declared in cloudauth_common.h:
     `cloudauth_qparam_cmp()`: split, decode and sort the query string
     parameters, for the signatures covering the query string;
 
+- `struct cloudauth_hdr`, `cloudauth_collect_hdrs(htx, name, pfx, hdrs, max)`
+    and `cloudauth_canon_hdrs_cat(out, hdrs, nb)`: collect the headers of a
+    request named `<name>` or starting with `<pfx>`, sorted by name, at most
+    `CLOUDAUTH_MAX_SIGNED_HDRS`, then append their canonical form, one line
+    per name with the values of a same name separated by commas, their spaces
+    trimmed and squeezed, for the signatures covering headers;
+
 - `cloudauth_url_encode_cat(out, in)`: appends the URL-encoded copy of `<in>`,
     for a query string parameter or a form field;
 

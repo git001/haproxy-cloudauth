@@ -234,9 +234,9 @@ static int cloudauth_azure_add_resource(const struct cloudauth_profile *prof, st
 /* Signs the request in <htx> with the storage account key of profile <prof>:
  * the "x-ms-date" and "x-ms-version" headers are added, then the
  * "Authorization: SharedKey <account>:<signature>" header, the signature being
- * the base64-encoded HMAC-SHA256 of the string to sign. The client headers
- * starting with "x-ms-" were removed before, so the canonicalized headers are
- * only the ones added here. The lock of the profile must be held. <strm> is
+ * the base64-encoded HMAC-SHA256 of the string to sign. The canonicalized
+ * headers are all the headers starting with "x-ms-", the ones of the client
+ * as well as the ones added here. The lock of the profile must be held. <strm> is
  * the stream of the request, for the traces. Returns 0 on success, -1 on
  * failure.
  */
@@ -248,12 +248,13 @@ static int cloudauth_azure_sign_sharedkey(const struct cloudauth_profile *prof, 
 	/* the HMAC encoded in base64, see CLOUDAUTH_B64_SIZE() */
 	char sig[CLOUDAUTH_B64_SIZE(EVP_MAX_MD_SIZE)];
 	char xms_date[CLOUDAUTH_HTTP_DATE_SIZE];
+	struct cloudauth_hdr hdrs[CLOUDAUTH_MAX_SIGNED_HDRS];
 	struct buffer *sts = NULL;
 	struct buffer *auth = NULL;
 	struct http_hdr_ctx ctx;
 	struct htx_sl *sl;
 	unsigned int mac_len = 0;
-	int key_len, i, ret = -1;
+	int key_len, nb, i, ret = -1;
 
 	TRACE_ENTER(CLOUDAUTH_EV_REQ, strm, prof);
 
@@ -291,15 +292,10 @@ static int cloudauth_azure_sign_sharedkey(const struct cloudauth_profile *prof, 
 		if (cloudauth_azure_add_std_hdr(htx, cloudauth_azure_std_hdrs[i], sts) < 0)
 			goto out;
 	}
-	if (!chunk_strcat(sts, "x-ms-date:"))
+	nb = cloudauth_collect_hdrs(htx, IST_NULL, ist("x-ms-"), hdrs, CLOUDAUTH_MAX_SIGNED_HDRS);
+	if (nb < 0)
 		goto out;
-	if (!chunk_strcat(sts, xms_date))
-		goto out;
-	if (!chunk_strcat(sts, "\nx-ms-version:"))
-		goto out;
-	if (!chunk_strcat(sts, cloudauth_azure_version(prof)))
-		goto out;
-	if (!chunk_memcat(sts, "\n", 1))
+	if (cloudauth_canon_hdrs_cat(sts, hdrs, nb) < 0)
 		goto out;
 	if (cloudauth_azure_add_resource(prof, htx, sts) < 0)
 		goto out;

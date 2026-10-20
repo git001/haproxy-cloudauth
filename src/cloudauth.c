@@ -149,6 +149,11 @@ static struct cloudauth_profile *cur_profile;
  */
 static struct list cloudauth_providers = LIST_HEAD_INIT(cloudauth_providers);
 
+/* The registered keyword lists of the "cloudauth" section, with the same
+ * constraints as the providers.
+ */
+static struct list cloudauth_keywords = LIST_HEAD_INIT(cloudauth_keywords);
+
 static const char * const cloudauth_signer_names[CLOUDAUTH_SIGNER_ENTRIES] = {
 	[CLOUDAUTH_SIGNER_NONE]      = "none",
 	[CLOUDAUTH_SIGNER_BEARER]    = "bearer",
@@ -892,6 +897,15 @@ static void cloudauth_free_profile(struct cloudauth_profile *prof)
 	free(prof);
 }
 
+/* Registers the list of keywords <kwl> of the "cloudauth" section. It is called
+ * from an STG_REGISTER initcall, by the core of the filter and by each provider
+ * for its own keywords.
+ */
+void cloudauth_register_keywords(struct cfg_kw_list *kwl)
+{
+	LIST_APPEND(&cloudauth_keywords, &kwl->list);
+}
+
 /* Parses the "cloudauth" section header and dispatches its keywords */
 static int cfg_parse_cloudauth(const char *file, int linenum, char **args, int kwm)
 {
@@ -953,10 +967,8 @@ static int cfg_parse_cloudauth(const char *file, int linenum, char **args, int k
 		goto out;
 	}
 
-	list_for_each_entry(kwl, &cfg_keywords.list, list) {
+	list_for_each_entry(kwl, &cloudauth_keywords, list) {
 		for (index = 0; kwl->kw[index].kw != NULL; index++) {
-			if (kwl->kw[index].section != CFG_CLOUDAUTH)
-				continue;
 			if (strcmp(kwl->kw[index].kw, args[0]) != 0)
 				continue;
 
@@ -966,7 +978,7 @@ static int cfg_parse_cloudauth(const char *file, int linenum, char **args, int k
 				goto out;
 			}
 
-			rc = kwl->kw[index].parse(args, CFG_CLOUDAUTH, NULL, NULL, file, linenum, &errmsg);
+			rc = kwl->kw[index].parse(args, CLOUDAUTH_CFG_SECTION, NULL, NULL, file, linenum, &errmsg);
 			if (rc & ERR_ALERT)
 				ha_alert("parsing [%s:%d] : %s\n", file, linenum, errmsg);
 			else if (rc & ERR_WARN)
@@ -976,7 +988,7 @@ static int cfg_parse_cloudauth(const char *file, int linenum, char **args, int k
 		}
 	}
 
-	best = cfg_find_best_match(args[0], &cfg_keywords.list, CFG_CLOUDAUTH);
+	best = cfg_find_best_match(args[0], &cloudauth_keywords, CLOUDAUTH_CFG_SECTION);
 	if (best)
 		ha_alert("parsing [%s:%d] : unknown keyword '%s' in '%s' section; did you mean '%s' maybe ?\n",
 		         file, linenum, args[0], cursection, best);
@@ -2213,20 +2225,20 @@ static void cloudauth_deinit(void)
 }
 
 static struct cfg_kw_list cfg_kws = { ILH, {
-	{ CFG_CLOUDAUTH, "fetch-max-backoff", cfg_parse_cloudauth_fetch_delay },
-	{ CFG_CLOUDAUTH, "fetch-refresh",     cfg_parse_cloudauth_fetch_delay },
-	{ CFG_CLOUDAUTH, "fetch-timeout",     cfg_parse_cloudauth_fetch_delay },
-	{ CFG_CLOUDAUTH, "input",             cfg_parse_cloudauth_input },
-	{ CFG_CLOUDAUTH, "provider",          cfg_parse_cloudauth_provider },
-	{ CFG_CLOUDAUTH, "region",            cfg_parse_cloudauth_region },
-	{ CFG_CLOUDAUTH, "signer",            cfg_parse_cloudauth_signer },
-	{ CFG_CLOUDAUTH, "token",             cfg_parse_cloudauth_token },
-	{ CFG_CLOUDAUTH, "token-endpoint",    cfg_parse_cloudauth_token_endpoint },
-	{ CFG_CLOUDAUTH, "token-scopes",      cfg_parse_cloudauth_token_scopes },
+	{ CLOUDAUTH_CFG_SECTION, "fetch-max-backoff", cfg_parse_cloudauth_fetch_delay },
+	{ CLOUDAUTH_CFG_SECTION, "fetch-refresh",     cfg_parse_cloudauth_fetch_delay },
+	{ CLOUDAUTH_CFG_SECTION, "fetch-timeout",     cfg_parse_cloudauth_fetch_delay },
+	{ CLOUDAUTH_CFG_SECTION, "input",             cfg_parse_cloudauth_input },
+	{ CLOUDAUTH_CFG_SECTION, "provider",          cfg_parse_cloudauth_provider },
+	{ CLOUDAUTH_CFG_SECTION, "region",            cfg_parse_cloudauth_region },
+	{ CLOUDAUTH_CFG_SECTION, "signer",            cfg_parse_cloudauth_signer },
+	{ CLOUDAUTH_CFG_SECTION, "token",             cfg_parse_cloudauth_token },
+	{ CLOUDAUTH_CFG_SECTION, "token-endpoint",    cfg_parse_cloudauth_token_endpoint },
+	{ CLOUDAUTH_CFG_SECTION, "token-scopes",      cfg_parse_cloudauth_token_scopes },
 	{ 0, NULL, NULL },
 }};
 
-INITCALL1(STG_REGISTER, cfg_register_keywords, &cfg_kws);
+INITCALL1(STG_REGISTER, cloudauth_register_keywords, &cfg_kws);
 
 static struct srv_kw_list srv_kws = { "CLOUDAUTH", { }, {
 	{ "cloudauth", srv_parse_cloudauth, 1, 0, 1 }, /* credential profile used to authenticate the requests */

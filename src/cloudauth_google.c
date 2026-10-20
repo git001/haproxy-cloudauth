@@ -702,8 +702,8 @@ static int cfg_parse_cloudauth_google_credentials(char **args, int section_type,
 }
 
 static struct cfg_kw_list cfg_kws = { ILH, {
-	{ CFG_CLOUDAUTH, "google-credentials", cfg_parse_cloudauth_google_credentials },
+	{ CLOUDAUTH_CFG_SECTION, "google-credentials", cfg_parse_cloudauth_google_credentials },
 	{ 0, NULL, NULL },
 }};
 
-INITCALL1(STG_REGISTER, cfg_register_keywords, &cfg_kws);
+INITCALL1(STG_REGISTER, cloudauth_register_keywords, &cfg_kws);

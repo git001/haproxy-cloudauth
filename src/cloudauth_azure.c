@@ -1180,15 +1180,15 @@ static int cfg_parse_cloudauth_azure_authority_host(char **args, int section_typ
 }
 
 static struct cfg_kw_list cfg_kws = { ILH, {
-	{ CFG_CLOUDAUTH, "account",              cfg_parse_cloudauth_azure_account },
-	{ CFG_CLOUDAUTH, "azure-authority-host", cfg_parse_cloudauth_azure_authority_host },
-	{ CFG_CLOUDAUTH, "azure-client-certificate", cfg_parse_cloudauth_azure_client_certificate },
-	{ CFG_CLOUDAUTH, "azure-client-certificate-password", cfg_parse_cloudauth_azure_client_certificate_password },
-	{ CFG_CLOUDAUTH, "azure-client-id",      cfg_parse_cloudauth_azure_client_id },
-	{ CFG_CLOUDAUTH, "azure-client-secret",  cfg_parse_cloudauth_azure_client_secret },
-	{ CFG_CLOUDAUTH, "azure-tenant-id",      cfg_parse_cloudauth_azure_tenant_id },
-	{ CFG_CLOUDAUTH, "azure-version",        cfg_parse_cloudauth_azure_version },
+	{ CLOUDAUTH_CFG_SECTION, "account",              cfg_parse_cloudauth_azure_account },
+	{ CLOUDAUTH_CFG_SECTION, "azure-authority-host", cfg_parse_cloudauth_azure_authority_host },
+	{ CLOUDAUTH_CFG_SECTION, "azure-client-certificate", cfg_parse_cloudauth_azure_client_certificate },
+	{ CLOUDAUTH_CFG_SECTION, "azure-client-certificate-password", cfg_parse_cloudauth_azure_client_certificate_password },
+	{ CLOUDAUTH_CFG_SECTION, "azure-client-id",      cfg_parse_cloudauth_azure_client_id },
+	{ CLOUDAUTH_CFG_SECTION, "azure-client-secret",  cfg_parse_cloudauth_azure_client_secret },
+	{ CLOUDAUTH_CFG_SECTION, "azure-tenant-id",      cfg_parse_cloudauth_azure_tenant_id },
+	{ CLOUDAUTH_CFG_SECTION, "azure-version",        cfg_parse_cloudauth_azure_version },
 	{ 0, NULL, NULL },
 }};
 
-INITCALL1(STG_REGISTER, cfg_register_keywords, &cfg_kws);
+INITCALL1(STG_REGISTER, cloudauth_register_keywords, &cfg_kws);

@@ -13,16 +13,25 @@
 #ifndef _CLOUDAUTH_H
 #define _CLOUDAUTH_H
 
+#include <haproxy/cfgparse.h>
 #include <haproxy/istbuf.h>
 #include <haproxy/server-t.h>
 
 #include <cloudauth/cloudauth-t.h>
+
+/* Section type of the keywords of the "cloudauth" section. These keywords are
+ * kept in a list of their own (see cloudauth_register_keywords()), so they do
+ * not need a section type of HAProxy.
+ */
+#define CLOUDAUTH_CFG_SECTION  CFG_NONE
 
 struct htx;
 struct session;
 struct stream;
 
 extern struct list cloudauth_profiles;
+
+void cloudauth_register_keywords(struct cfg_kw_list *kwl);
 
 struct cloudauth_profile *cloudauth_find_profile(const char *name);
 const char *cloudauth_signer_str(enum cloudauth_signer signer);

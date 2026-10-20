@@ -1116,9 +1116,9 @@ static int cfg_parse_cloudauth_s3_role_session_name(char **args, int section_typ
 }
 
 static struct cfg_kw_list cfg_kws = { ILH, {
-	{ CFG_CLOUDAUTH, "s3-role-arn",          cfg_parse_cloudauth_s3_role_arn },
-	{ CFG_CLOUDAUTH, "s3-role-session-name", cfg_parse_cloudauth_s3_role_session_name },
+	{ CLOUDAUTH_CFG_SECTION, "s3-role-arn",          cfg_parse_cloudauth_s3_role_arn },
+	{ CLOUDAUTH_CFG_SECTION, "s3-role-session-name", cfg_parse_cloudauth_s3_role_session_name },
 	{ 0, NULL, NULL },
 }};
 
-INITCALL1(STG_REGISTER, cfg_register_keywords, &cfg_kws);
+INITCALL1(STG_REGISTER, cloudauth_register_keywords, &cfg_kws);

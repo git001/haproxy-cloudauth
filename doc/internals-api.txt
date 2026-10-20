@@ -125,10 +125,12 @@ The fields of struct cloudauth_provider are:
   - sigv4: the variant of the "sigv4" signer (see section 7), which must be
     set if and only if the provider supports this signer.
 
-The keywords of a provider are registered in the CFG_CLOUDAUTH section with
-cfg_register_keywords(). Their parsers reach the profile being parsed with
-cloudauth_cfg_profile(), and must reject the keyword if the profile does not
-use their provider, so that the provider must be set first.
+The keywords of a provider are declared with the CLOUDAUTH_CFG_SECTION section
+type and registered with cloudauth_register_keywords(), from an STG_REGISTER
+initcall. They are kept in a list of their own, not in the keywords of HAProxy.
+Their parsers reach the profile being parsed with cloudauth_cfg_profile(), and
+must reject the keyword if the profile does not use their provider, so that the
+provider must be set first.
 
 
 4. Token sources

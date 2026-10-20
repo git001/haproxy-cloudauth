@@ -54,6 +54,7 @@ static inline struct cloudauth_google_ctx *cloudauth_google_ctx(const struct clo
 static const struct cloudauth_sigv4 cloudauth_google_sigv4 = {
 	.algorithm  = "GOOG4-HMAC-SHA256",
 	.key_prefix = "GOOG4",
+	.hdr_pfx    = IST("x-goog-"),
 	.hash_hdr   = IST("x-goog-content-sha256"),
 	.date_hdr   = IST("x-goog-date"),
 	.token_hdr  = IST_NULL,

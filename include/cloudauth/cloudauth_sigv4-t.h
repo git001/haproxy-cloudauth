@@ -29,13 +29,13 @@
 /* The variant of Signature Version 4 used by a provider: Amazon S3 and the
  * storages compatible with it use the "AWS4" one, with the "x-amz-" headers,
  * and Google Cloud Storage its own "GOOG4" one, with the "x-goog-" headers.
- * The names of the headers must be in lower case, and sort in this order
- * after "host": <hash_hdr>, <date_hdr>, then <token_hdr>, as in the signed
- * headers.
+ * The names of the headers must be in lower case and start with <hdr_pfx>, so
+ * that they are signed.
  */
 struct cloudauth_sigv4 {
 	const char *algorithm;          /* "AWS4-HMAC-SHA256", "GOOG4-HMAC-SHA256" */
 	const char *key_prefix;         /* prefix of the secret deriving the signing key: "AWS4", "GOOG4" */
+	struct ist hdr_pfx;             /* prefix of the headers signed with the Host one: "x-amz-", "x-goog-" */
 	struct ist hash_hdr;            /* header carrying the hash of the payload: "x-amz-content-sha256"... */
 	struct ist date_hdr;            /* header carrying the date: "x-amz-date"... */
 	struct ist token_hdr;           /* header carrying the session token: "x-amz-security-token", IST_NULL if none */

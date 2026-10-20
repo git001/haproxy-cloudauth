@@ -51,6 +51,7 @@
 static const struct cloudauth_sigv4 cloudauth_s3_sigv4 = {
 	.algorithm  = "AWS4-HMAC-SHA256",
 	.key_prefix = "AWS4",
+	.hdr_pfx    = IST("x-amz-"),
 	.hash_hdr   = IST("x-amz-content-sha256"),
 	.date_hdr   = IST("x-amz-date"),
 	.token_hdr  = IST("x-amz-security-token"),

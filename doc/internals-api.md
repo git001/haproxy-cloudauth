@@ -355,19 +355,22 @@ and the hash of the canonical request of each request. The fields of
 - key_prefix: the prefix of the secret deriving the signing key, such as `AWS4`
     or `GOOG4`;
 
+- hdr_pfx: the prefix of the headers of the storage, such as `x-amz-` or
+    `x-goog-`, which are all signed;
+
 - hash_hdr, date_hdr, token_hdr: the names, in lower case, of the headers
     carrying the hash of the payload, the date and the session token, such as
     `x-amz-content-sha256`, `x-amz-date` and `x-amz-security-token`. They must
-    sort in this order, after `host`. The token_hdr is `IST_NULL` if the
-    variant has no session tokens, which are then rejected;
+    start with hdr_pfx so that they are signed. The token_hdr is `IST_NULL` if
+    the variant has no session tokens, which are then rejected;
 
 - service, request: the service and the request type of the credential scope,
     such as `s3` and `aws4_request`;
 
 - region: the region used without `region`, or NULL if it is mandatory.
 
-The signed headers are the Host header and the headers added by the signer,
-since the client headers carrying the prefixes of the providers were removed.
+The signed headers are the Host header and all the headers starting with
+hdr_pfx, the ones of the client as well as the ones added by the signer.
 The path and the query string are URL-decoded then encoded again with only the
 unreserved characters of RFC 3986, the parameters being sorted once encoded, at
 most `CLOUDAUTH_SIGV4_MAX_PARAMS`. The payload is not signed

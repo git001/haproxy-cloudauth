@@ -243,68 +243,41 @@ static int cloudauth_sigv4_add_scope(struct buffer *out, const struct ist day, c
 	return 0;
 }
 
-/* Appends to <out> the names of the headers signed with the variant <v4>,
- * separated by semicolons, the session token one only if <session> is set.
- * Returns 0 on success, -1 on failure.
+/* Appends to <out> the names of the <nb> signed headers <hdrs>, sorted by
+ * cloudauth_collect_hdrs(), each name once, separated by semicolons. Returns
+ * 0 on success, -1 on failure.
  */
-static int cloudauth_sigv4_add_signed_hdrs(struct buffer *out, const struct cloudauth_sigv4 *v4, int session)
+static int cloudauth_sigv4_add_signed_hdrs(struct buffer *out, const struct cloudauth_hdr *hdrs, int nb)
 {
-	if (!chunk_strcat(out, "host;"))
-		return -1;
-	if (!chunk_istcat(out, v4->hash_hdr))
-		return -1;
-	if (!chunk_memcat(out, ";", 1))
-		return -1;
-	if (!chunk_istcat(out, v4->date_hdr))
-		return -1;
-	if (!session)
-		return 0;
-	if (!chunk_memcat(out, ";", 1))
-		return -1;
-	if (!chunk_istcat(out, v4->token_hdr))
-		return -1;
+	int i;
+
+	for (i = 0; i < nb; i++) {
+		if (i && isteq(hdrs[i].name, hdrs[i - 1].name))
+			continue;
+		if (i && !chunk_memcat(out, ";", 1))
+			return -1;
+		if (!chunk_istcat(out, hdrs[i].name))
+			return -1;
+	}
 	return 0;
 }
 
-/* Appends to <out> the line "<name>:<value>" of a signed header, followed by a
- * line feed. chunk_appendf() is not used since it does not report a value
- * which does not fit. Returns 0 on success, -1 on failure.
+/* Appends to <out> the canonical request of the request in <htx>, whose <nb>
+ * signed headers are <hdrs>: the method, the canonical URI, the canonical
+ * query string, the signed headers with their values, the list of the signed
+ * headers, and the hash of the payload, one per line. Returns 0 on success,
+ * -1 on failure.
  */
-static int cloudauth_sigv4_add_hdr_line(struct buffer *out, const struct ist name, const struct ist value)
-{
-	if (!chunk_istcat(out, name))
-		return -1;
-	if (!chunk_memcat(out, ":", 1))
-		return -1;
-	if (!chunk_istcat(out, value))
-		return -1;
-	if (!chunk_memcat(out, "\n", 1))
-		return -1;
-	return 0;
-}
-
-/* Appends to <out> the canonical request of the request in <htx>, signed at
- * the date <stamp> with the variant <v4> and the session token <session> if
- * not empty: the method, the canonical URI, the canonical query string, the
- * signed headers with their values, the list of the signed headers, and the
- * hash of the payload, one per line. The signed headers are the Host header
- * and the headers added by the signer, since the client headers carrying the
- * prefix of the variant were removed. Returns 0 on success, -1 on failure.
- */
-static int cloudauth_sigv4_add_creq(struct buffer *out, struct htx *htx, const struct cloudauth_sigv4 *v4,
-                                    const char *stamp, const struct ist session)
+static int cloudauth_sigv4_add_creq(struct buffer *out, struct htx *htx, const struct cloudauth_hdr *hdrs,
+                                    int nb)
 {
 	struct buffer *work1 = NULL, *work2 = NULL;
-	struct http_hdr_ctx ctx;
 	struct htx_sl *sl;
 	struct ist path, query;
 	int ret = -1;
 
 	sl = http_get_stline(htx);
 	if (!sl)
-		return -1;
-	ctx.blk = NULL;
-	if (!http_find_header(htx, ist("host"), &ctx, 1))
 		return -1;
 
 	work1 = alloc_trash_chunk();
@@ -332,19 +305,11 @@ static int cloudauth_sigv4_add_creq(struct buffer *out, struct htx *htx, const s
 		goto out;
 	if (!chunk_memcat(out, "\n", 1))
 		goto out;
-	if (cloudauth_sigv4_add_hdr_line(out, ist("host"), ctx.value) < 0)
+	if (cloudauth_canon_hdrs_cat(out, hdrs, nb) < 0)
 		goto out;
-	if (cloudauth_sigv4_add_hdr_line(out, v4->hash_hdr, ist(CLOUDAUTH_SIGV4_UNSIGNED_PAYLOAD)) < 0)
-		goto out;
-	if (cloudauth_sigv4_add_hdr_line(out, v4->date_hdr, ist(stamp)) < 0)
-		goto out;
-	if (istlen(session)) {
-		if (cloudauth_sigv4_add_hdr_line(out, v4->token_hdr, session) < 0)
-			goto out;
-	}
 	if (!chunk_memcat(out, "\n", 1))
 		goto out;
-	if (cloudauth_sigv4_add_signed_hdrs(out, v4, istlen(session)) < 0)
+	if (cloudauth_sigv4_add_signed_hdrs(out, hdrs, nb) < 0)
 		goto out;
 	if (!chunk_memcat(out, "\n", 1))
 		goto out;
@@ -421,11 +386,12 @@ int cloudauth_sigv4_sign(const struct cloudauth_profile *prof, const struct stre
 	unsigned char mac[SHA256_DIGEST_LENGTH];
 	char hex[2 * SHA256_DIGEST_LENGTH + 1];
 	char stamp[CLOUDAUTH_SIGV4_DATE_SIZE];
+	struct cloudauth_hdr hdrs[CLOUDAUTH_MAX_SIGNED_HDRS];
 	struct buffer *creq = NULL, *sts = NULL, *auth = NULL;
 	struct ist id, secret, session, day, detail;
 	struct tm tm;
 	size_t len;
-	int ret = -1;
+	int nb, ret = -1;
 
 	TRACE_ENTER(CLOUDAUTH_EV_REQ, strm, prof);
 
@@ -456,6 +422,16 @@ int cloudauth_sigv4_sign(const struct cloudauth_profile *prof, const struct stre
 			goto out;
 	}
 
+	/* the Host header and all the headers carrying the prefix of the
+	 * variant are signed, the ones of the client as well as the ones added
+	 * above. They remain in place until the Authorization header is added.
+	 */
+	nb = cloudauth_collect_hdrs(htx, ist("host"), v4->hdr_pfx, hdrs, CLOUDAUTH_MAX_SIGNED_HDRS);
+	if (nb < 0) {
+		*reason = "too many headers to sign";
+		goto out;
+	}
+
 	*reason = "out of memory";
 	creq = alloc_trash_chunk();
 	if (!creq)
@@ -468,7 +444,7 @@ int cloudauth_sigv4_sign(const struct cloudauth_profile *prof, const struct stre
 		goto out;
 
 	*reason = "the canonical request does not fit in a buffer";
-	if (cloudauth_sigv4_add_creq(creq, htx, v4, stamp, session) < 0)
+	if (cloudauth_sigv4_add_creq(creq, htx, hdrs, nb) < 0)
 		goto out;
 	*reason = "cannot compute the signature";
 	if (!EVP_Digest(creq->area, creq->data, mac, NULL, EVP_sha256(), NULL))
@@ -506,7 +482,7 @@ int cloudauth_sigv4_sign(const struct cloudauth_profile *prof, const struct stre
 		goto out;
 	/* only the names of the headers, the signature is appended after */
 	len = auth->data;
-	if (cloudauth_sigv4_add_signed_hdrs(auth, v4, istlen(session)) < 0)
+	if (cloudauth_sigv4_add_signed_hdrs(auth, hdrs, nb) < 0)
 		goto out;
 	detail = ist2(auth->area + len, auth->data - len);
 	TRACE_STATE("sigv4 signed headers", CLOUDAUTH_EV_REQ, strm, prof, &detail);

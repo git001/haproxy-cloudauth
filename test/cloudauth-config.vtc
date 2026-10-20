@@ -1,0 +1,264 @@
+varnishtest "The cloudauth configuration errors are detected"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH)'"
+feature ignore_unknown_macro
+
+shell {
+    printf 'file-token\n\n' > "${tmpdir}/token"
+    chmod 600 "${tmpdir}/token"
+    printf ' \n' > "${tmpdir}/empty"
+}
+
+# the profile section is experimental
+haproxy h1 -conf-BAD {section 'cloudauth' is experimental} {
+    cloudauth p1
+        signer bearer
+        token cli
+}
+
+# a signer is mandatory
+haproxy h2 -conf-BAD {cloudauth section 'p1' : missing 'signer'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        token cli
+}
+
+# the secrets are never accepted in the configuration, nor echoed
+haproxy h3 -conf-BAD {'token' expects 'env:<variable>', 'file:<path>' or 'cli', secrets are not accepted in the configuration} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token my-secret-token
+}
+
+# the environment variable must be set
+haproxy h4 -conf-BAD {environment variable 'CLOUDAUTH_UNSET_VARIABLE' is not set or empty} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token env:CLOUDAUTH_UNSET_VARIABLE
+}
+
+# the profile must exist
+haproxy h5 -conf-BAD {unknown cloudauth profile 'nope'} {
+    global
+        expose-experimental-directives
+    defaults
+        mode http
+    backend be
+        filter-config cloudauth enabled
+        server s1 localhost:80 cloudauth nope
+}
+
+# the backend must have an enabled cloudauth filter
+haproxy h6 -conf-BAD {'cloudauth' requires an enabled cloudauth filter in backend 'be'} {
+    global
+        expose-experimental-directives
+    defaults
+        mode http
+    backend be
+        filter-config cloudauth
+        server s1 localhost:80 cloudauth p1
+    cloudauth p1
+        signer bearer
+        token cli
+}
+
+# the client Host header is never used by default
+haproxy h7 -conf-BAD {'cloudauth' requires either a host name as server address or an explicit 'sni'} {
+    global
+        expose-experimental-directives
+    defaults
+        mode http
+    backend be
+        filter-config cloudauth enabled
+        server s1 127.0.0.1:80 cloudauth p1
+    cloudauth p1
+        signer bearer
+        token cli
+}
+
+# unknown signer
+haproxy h8 -conf-BAD {unknown signer 'azure', expects 'bearer', 'sas', 'sharedkey' or 'sigv4'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer azure
+        token cli
+}
+
+# without provider, only the bearer signer is supported
+haproxy h9 -conf-BAD {cloudauth section 'p1' : the 'sas' signer requires a 'provider'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer sas
+        token cli
+}
+
+# the provider must be supported, which depends on the build options
+haproxy h10 -conf-BAD {'provider' : unknown provider 'nope', the supported ones are :} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider nope
+        signer bearer
+        token cli
+}
+
+# the fetching delays require a token fetched by HAProxy
+haproxy h11 -conf-BAD {'fetch-timeout', 'fetch-refresh' and 'fetch-max-backoff' require a token fetched by HAProxy} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token cli
+        fetch-timeout 2s
+}
+
+# the inputs require a token source using them
+haproxy h15 -conf-BAD {'input' requires a token source using inputs first ('token <source>')} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token cli
+        input federated-token file:${tmpdir}/token
+}
+
+# the token files must exist and not be empty
+haproxy h12 -conf-BAD {'token' : cannot read file '${tmpdir}/missing' : No such file or directory.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token file:${tmpdir}/missing
+}
+
+haproxy h13 -conf-BAD {'token' : file '${tmpdir}/empty' is empty.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token file:${tmpdir}/empty
+}
+
+# the token is read from the file, without the trailing line feeds
+server s1 {
+    rxreq
+    expect req.http.authorization == "Bearer file-token"
+    txresp
+} -start
+
+haproxy h14 -conf {
+    global
+        expose-experimental-directives
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth p1
+        signer bearer
+        token file:${tmpdir}/token
+    frontend fe
+        bind "fd@${fe}"
+        default_backend be
+    backend be
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s1_port} cloudauth p1
+} -start
+
+client c1 -connect ${h14_fe_sock} {
+    txreq
+    rxresp
+    expect resp.status == 200
+} -run
+
+# the token endpoint and the scopes require a token fetched by HAProxy
+haproxy h16 -conf-BAD {'token-endpoint' and 'token-scopes' require a token fetched by HAProxy ('token <source>')} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token cli
+        token-scopes https://example.com/read
+}
+
+haproxy h17 -conf-BAD {'token-endpoint' : invalid URL 'ftp://127.0.0.1/token', expects 'http://' or 'https://'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token cli
+        token-endpoint ftp://127.0.0.1/token
+}
+
+haproxy h18 -conf-BAD {'token-scopes' : invalid scope 'a"b'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token cli
+        token-scopes read 'a"b'
+}
+
+haproxy h19 -conf-BAD {'token-scopes' may only be set once.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token cli
+        token-scopes read
+        token-scopes write
+}
+
+# the scopes are limited to 1024 characters, separators included
+haproxy h20 -conf-BAD {'token-scopes' : the scopes are longer than 1024 characters.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token cli
+        token-scopes https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa https://example.com/bbbbbbbbbb
+}
+
+# the sigv4 signer requires a provider, and only it uses a region
+haproxy h21 -conf-BAD {cloudauth section 'p1' : the 'sigv4' signer requires a 'provider'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer sigv4
+        token cli
+}
+
+haproxy h22 -conf-BAD {cloudauth section 'p1' : 'region' is only used by the 'sigv4' signer.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        region us-east-1
+        token cli
+}
+
+haproxy h23 -conf-BAD {'region' : invalid region 'us/east', expects letters, digits, dashes or underscores.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        region us/east
+        token cli
+}
+
+haproxy h24 -conf-BAD {'region' may only be set once.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        region us-east-1
+        region eu-west-1
+        token cli
+}

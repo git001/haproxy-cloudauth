@@ -1,0 +1,251 @@
+varnishtest "The cloudauth S3 provider fetches the access keys of the workload identities"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_S3)'"
+feature ignore_unknown_macro
+
+# the federated token (JWT) expiring on 2100-01-01, and the responses of the
+# Security Token Service: the credentials of the role, those of another
+# session, an error, and credentials containing an entity, which is never
+# decoded
+shell {
+    printf '%s\n' "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.ZmlsZS1zaWc" > "${tmpdir}/federated-token"
+    chmod 600 "${tmpdir}/federated-token"
+    cat > "${tmpdir}/sts.xml" <<'XML'
+<AssumeRoleWithWebIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleWithWebIdentityResult>
+    <SubjectFromWebIdentityToken>system:serviceaccount:default:web</SubjectFromWebIdentityToken>
+    <Audience>sts.amazonaws.com</Audience>
+    <AssumedRoleUser>
+      <Arn>arn:aws:sts::123456789012:assumed-role/web/haproxy</Arn>
+      <AssumedRoleId>AROACLKWSDQRAOEXAMPLE:haproxy</AssumedRoleId>
+    </AssumedRoleUser>
+    <Credentials>
+      <SessionToken>AQoDYXdzEE0a8ANXXXXXXXXNO1ewxE5TijQyp+IEXAMPLE/=</SessionToken>
+      <SecretAccessKey>wJalrXUtnFEMI/K7MDENG/bPxRfiCYzEXAMPLEKEY</SecretAccessKey>
+      <Expiration>2100-01-01T00:00:00Z</Expiration>
+      <AccessKeyId>ASIAWEBIDENTITYEXAMPLE</AccessKeyId>
+    </Credentials>
+    <Provider>arn:aws:iam::123456789012:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/EXAMPLE</Provider>
+  </AssumeRoleWithWebIdentityResult>
+  <ResponseMetadata>
+    <RequestId>ad4156e9-bce1-11e2-82e6-6b6efEXAMPLE</RequestId>
+  </ResponseMetadata>
+</AssumeRoleWithWebIdentityResponse>
+XML
+    sed -e 's/ASIAWEBIDENTITYEXAMPLE/ASIASESSIONEXAMPLE/' -e 's/AQoDYX[^<]*/session-token/' "${tmpdir}/sts.xml" > "${tmpdir}/session.xml"
+    sed -e 's/wJalrX[^<]*/secret\&amp;key/' -e 's/AQoDYX[^<]*/do-not-report-this/' "${tmpdir}/sts.xml" > "${tmpdir}/entity.xml"
+    cat > "${tmpdir}/error.xml" <<'XML'
+<ErrorResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <Error>
+    <Type>Sender</Type>
+    <Code>InvalidIdentityToken</Code>
+    <Message>do not report this</Message>
+  </Error>
+  <RequestId>ad4156e9-bce1-11e2-82e6-6b6efEXAMPLE</RequestId>
+</ErrorResponse>
+XML
+}
+
+# the Security Token Service: the federated token read from the file is
+# exchanged for the credentials of the role of the environment, with the
+# default session name
+server s1 {
+    rxreq
+    expect req.method == "POST"
+    expect req.url == "/"
+    expect req.http.content-type == "application/x-www-form-urlencoded"
+    expect req.http.authorization == <undef>
+    expect req.body == "Action=AssumeRoleWithWebIdentity&Version=2011-06-15&RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fweb&RoleSessionName=haproxy&WebIdentityToken=eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.ZmlsZS1zaWc"
+    txresp -hdr "Content-Type: text/xml" -bodyfrom "${tmpdir}/sts.xml"
+} -start
+
+# another session name, the federated token injected from the CLI
+server s2 {
+    rxreq
+    expect req.url == "/session?x=1"
+    expect req.body ~ "&RoleSessionName=app%40example.com&WebIdentityToken=eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.Y2xpLXNpZw$"
+    txresp -hdr "Content-Type: text/xml" -bodyfrom "${tmpdir}/session.xml"
+} -start
+
+# a federated token refused, and credentials which cannot be read as is
+server s3 -repeat 10 {
+    rxreq
+    txresp -status 400 -hdr "Content-Type: text/xml" -bodyfrom "${tmpdir}/error.xml"
+} -start
+
+server s4 -repeat 10 {
+    rxreq
+    txresp -hdr "Content-Type: text/xml" -bodyfrom "${tmpdir}/entity.xml"
+} -start
+
+# the storage, which receives the access keys and their session tokens
+server s5 {
+    rxreq
+    expect req.http.authorization ~ "^AWS4-HMAC-SHA256 Credential=ASIAWEBIDENTITYEXAMPLE/[0-9]{8}/eu-west-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=[0-9a-f]{64}$"
+    expect req.http.x-amz-security-token == "AQoDYXdzEE0a8ANXXXXXXXXNO1ewxE5TijQyp+IEXAMPLE/="
+    txresp -body "wi"
+} -start
+
+server s6 {
+    rxreq
+    expect req.http.authorization ~ "^AWS4-HMAC-SHA256 Credential=ASIASESSIONEXAMPLE/"
+    expect req.http.x-amz-security-token == "session-token"
+    txresp -body "session"
+} -start
+
+# the role of the workload, as set by IRSA
+setenv AWS_ROLE_ARN arn:aws:iam::123456789012:role/web
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+    traces
+        trace cloudauth sink buf0 level developer start now
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth wi
+        provider s3
+        signer sigv4
+        region eu-west-1
+        token workload-identity
+        input federated-token "file:${tmpdir}/federated-token"
+        s3-role-arn env:AWS_ROLE_ARN
+        token-endpoint "http://${s1_addr}:${s1_port}/"
+    cloudauth session
+        provider s3
+        signer sigv4
+        region eu-west-1
+        token workload-identity
+        s3-role-arn arn:aws:iam::123456789012:role/web
+        s3-role-session-name app@example.com
+        token-endpoint "http://${s2_addr}:${s2_port}/session?x=1"
+    cloudauth denied
+        provider s3
+        signer sigv4
+        region eu-west-1
+        token workload-identity
+        input federated-token "file:${tmpdir}/federated-token"
+        s3-role-arn arn:aws:iam::123456789012:role/web
+        token-endpoint "http://${s3_addr}:${s3_port}/"
+        fetch-max-backoff 10s
+    cloudauth entity
+        provider s3
+        signer sigv4
+        region eu-west-1
+        token workload-identity
+        input federated-token "file:${tmpdir}/federated-token"
+        s3-role-arn arn:aws:iam::123456789012:role/web
+        token-endpoint "http://${s4_addr}:${s4_port}/"
+        fetch-max-backoff 10s
+    frontend fe
+        bind "fd@${fe}"
+        use_backend be_session if { path_beg /session/ }
+        default_backend be_wi
+    backend be_wi
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s5_port} cloudauth wi
+    backend be_session
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s6_port} cloudauth session
+} -start
+
+# let the access keys be fetched
+delay 1
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/bucket/object"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "wi"
+} -run
+
+# the input is injected between two attempts to fetch the access key, made
+# after 1 and 3 seconds
+delay 0.5
+
+haproxy h1 -cli {
+    send "show cloudauth wi"
+    expect ~ "wi\ts3\tsigv4\tfetch:workload-identity\tvalid\t2100-01-01T00:00:00Z\t.*\t-\tfederated-token:valid:2100-01-01T00:00:00Z\n"
+
+    send "show cloudauth denied"
+    expect ~ "denied\ts3\tsigv4\tfetch:workload-identity\tmissing\t.*\tthe security token service answered with status 400 \\(InvalidIdentityToken\\)\tfederated-token:valid:2100-01-01T00:00:00Z\n"
+
+    send "show cloudauth entity"
+    expect ~ "entity\ts3\tsigv4\tfetch:workload-identity\tmissing\t.*\tmissing or invalid \"SecretAccessKey\" in the credentials\tfederated-token:valid:2100-01-01T00:00:00Z\n"
+
+    # without federated token, the access key cannot be fetched
+    send "show cloudauth session"
+    expect ~ "session\ts3\tsigv4\tfetch:workload-identity\tmissing\t.*\tthe input 'federated-token' is missing\tfederated-token:missing:-\n"
+
+    # a new federated token is used at once
+    send "set cloudauth input session federated-token <<\neyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.Y2xpLXNpZw\n"
+    expect ~ "Input updated."
+}
+
+delay 0.5
+
+client c2 -connect ${h1_fe_sock} {
+    txreq -url "/session/object"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "session"
+} -run
+
+# the endpoints are traced without their query string, as well as the role,
+# the session name, the size of the responses and the error code, and
+# neither the federated tokens, the credentials nor the error message are
+# traced
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "security token service endpoint : profile=session \\(http://${s2_addr}:${s2_port}/session\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "role assumed : profile=wi \\(arn:aws:iam::123456789012:role/web\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "role session name : profile=session \\(app@example.com\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "payload of the response : profile=wi \\([0-9]+ bytes\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "credentials element found : profile=wi"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "security token service error code : profile=denied status=400 \\(InvalidIdentityToken\\)"
+}
+
+# the functions of the token source are traced at the developer level
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_s3_wi_request\\(\\): entering : profile=wi"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_s3_sts_response\\(\\): leaving : profile=wi"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_s3_sts_response\\(\\): leaving on error : profile=denied"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect !~ "x=1|ZmlsZS1zaWc|Y2xpLXNpZw|EXAMPLEKEY|AQoDYX|session-token|&amp;|do-not-report|do not report"
+}

@@ -1,0 +1,314 @@
+varnishtest "The cloudauth Google configuration errors are detected"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_GOOGLE)'"
+feature ignore_unknown_macro
+
+# credential files: valid, of another type, without e-mail address, with an
+# ECDSA key, with an HTTP token endpoint and without private key, then the
+# workload identity federations: valid, with impersonation, without audience
+# and with an HTTP token endpoint
+shell {
+    key=$(sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/../ssl/certs/common.pem" | awk '{ printf "%s\\n", $0 }')
+    eckey=$(sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/../ssl/certs/ecdsa.pem" | awk '{ printf "%s\\n", $0 }')
+    printf '{"type":"service_account","private_key":"%s","client_email":"sa@project.iam.gserviceaccount.com"}\n' "$key" > "${tmpdir}/sa.json"
+    printf '{"type":"external_account","audience":"//iam.googleapis.com/projects/1"}\n' > "${tmpdir}/external.json"
+    printf '{"type":"service_account","private_key":"%s"}\n' "$key" > "${tmpdir}/no-email.json"
+    printf '{"type":"service_account","private_key":"%s","client_email":"sa@project.iam.gserviceaccount.com"}\n' "$eckey" > "${tmpdir}/ecdsa.json"
+    printf '{"type":"service_account","private_key":"%s","client_email":"sa@project.iam.gserviceaccount.com","token_uri":"http://127.0.0.1/token"}\n' "$key" > "${tmpdir}/http.json"
+    printf '{"type":"service_account","client_email":"sa@project.iam.gserviceaccount.com"}\n' > "${tmpdir}/no-key.json"
+    wi='"type":"external_account","subject_token_type":"urn:ietf:params:oauth:token-type:jwt","credential_source":{"file":"/var/run/secrets/tokens/gcp-token"}'
+    aud='"audience":"//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/provider"'
+    printf '{%s,%s,"token_url":"https://sts.googleapis.com/v1/token"}\n' "$wi" "$aud" > "${tmpdir}/wi.json"
+    printf '{%s,%s,"service_account_impersonation_url":"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com:generateAccessToken"}\n' "$wi" "$aud" > "${tmpdir}/wi-impersonation.json"
+    printf '{%s}\n' "$wi" > "${tmpdir}/wi-no-audience.json"
+    printf '{%s,%s,"token_url":"http://127.0.0.1/v1/token"}\n' "$wi" "$aud" > "${tmpdir}/wi-http.json"
+    printf 'GOOGTS7C7FUP3AIRVJTE2BCDKINBTES3HC2GY5CBFJDCQ2SYHV6A6XXVTJFSA\n' > "${tmpdir}/hmac-no-secret"
+    printf 'GOOGTS7C7FUP3AIRVJTE2BCDKINBTES3HC2GY5CBFJDCQ2SYHV6A6XXVTJFSA:secret:session-token\n' > "${tmpdir}/hmac-session"
+    chmod 600 "${tmpdir}"/*.json "${tmpdir}/hmac-no-secret" "${tmpdir}/hmac-session"
+}
+
+setenv GOOGLE_HMAC_SECRET bGoa+V7g/yqDXvKRqq+JTFn4uQZbPiQJo4pf9RzJ
+
+# only the bearer and sigv4 signers are supported
+haproxy h1 -conf-BAD {cloudauth section 'p1' : provider 'google' does not support the 'sharedkey' signer.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer sharedkey
+        token cli
+}
+
+# a valid configuration with a token which is not fetched
+haproxy h2 -conf-OK {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token cli
+}
+
+# the token sources of the provider are listed
+haproxy h3 -conf-BAD {'token' expects 'env:<variable>', 'file:<path>', 'cli' or a token source of provider 'google' ('metadata-server', 'service-account', 'workload-identity')} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token managed-identity
+}
+
+# a valid configuration with the metadata server
+haproxy h4 -conf-OK {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token metadata-server
+        token-endpoint http://127.0.0.1/computeMetadata/v1/instance/service-accounts/default/token
+        token-scopes https://www.googleapis.com/auth/devstorage.read_only https://www.googleapis.com/auth/cloud-platform
+}
+
+# scopes of exactly 1024 characters, separators included, are accepted
+haproxy h5 -conf-OK {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token metadata-server
+        token-scopes https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa https://example.com/bb
+}
+
+# the credential file is only used by the service accounts and the workload
+# identities, which require it
+haproxy h6 -conf-BAD {'google-credentials' is only used by the 'service-account' and 'workload-identity' token sources} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token metadata-server
+        google-credentials "file:${tmpdir}/sa.json"
+}
+
+haproxy h7 -conf-BAD {the 'service-account' token source requires 'google-credentials'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token service-account
+}
+
+# the credential file must be the one of a service account, with an e-mail
+# address and an unencrypted RSA private key, and an HTTPS token endpoint
+haproxy h8 -conf-BAD {invalid credential file 'file:${tmpdir}/external.json' : not the key of a service account ("type" is not "service_account")} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token service-account
+        google-credentials "file:${tmpdir}/external.json"
+}
+
+haproxy h9 -conf-BAD {missing or invalid "client_email"} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token service-account
+        google-credentials "file:${tmpdir}/no-email.json"
+}
+
+haproxy h10 -conf-BAD {the private key must be an RSA one} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token service-account
+        google-credentials "file:${tmpdir}/ecdsa.json"
+}
+
+haproxy h11 -conf-BAD {invalid "token_uri", expects an HTTPS URL} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token service-account
+        google-credentials "file:${tmpdir}/http.json"
+}
+
+haproxy h12 -conf-BAD {no unencrypted PEM private key found in "private_key"} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token service-account
+        google-credentials "file:${tmpdir}/no-key.json"
+}
+
+# the token endpoint is the audience of the assertions, written in JSON
+haproxy h13 -conf-BAD {the 'token-endpoint' of the 'service-account' token source must not contain spaces, double quotes nor backslashes} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token service-account
+        google-credentials "file:${tmpdir}/sa.json"
+        token-endpoint 'https://127.0.0.1/"token'
+}
+
+# a valid service account
+haproxy h14 -conf-OK {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token service-account
+        google-credentials "file:${tmpdir}/sa.json"
+}
+
+haproxy h15 -conf-BAD {the 'workload-identity' token source requires 'google-credentials'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token workload-identity
+}
+
+# the credential file must be the one of a workload identity federation,
+# without impersonation, with an audience and an HTTPS token endpoint
+haproxy h16 -conf-BAD {invalid credential file 'file:${tmpdir}/sa.json' : not a workload identity federation ("type" is not "external_account")} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token workload-identity
+        google-credentials "file:${tmpdir}/sa.json"
+}
+
+haproxy h17 -conf-BAD {the service account impersonation ("service_account_impersonation_url") is not supported, the access must be granted to the workload identity} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token workload-identity
+        google-credentials "file:${tmpdir}/wi-impersonation.json"
+}
+
+haproxy h18 -conf-BAD {missing or invalid "audience"} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token workload-identity
+        google-credentials "file:${tmpdir}/wi-no-audience.json"
+}
+
+haproxy h19 -conf-BAD {invalid "token_url", expects an HTTPS URL} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token workload-identity
+        google-credentials "file:${tmpdir}/wi-http.json"
+}
+
+# the federated token is the only input
+haproxy h20 -conf-BAD {'input' : unknown input 'subject-token' of the token source 'workload-identity', expects 'federated-token'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token workload-identity
+        input subject-token env:FEDERATED_TOKEN
+        google-credentials "file:${tmpdir}/wi.json"
+}
+
+# a valid workload identity federation, whose credential source is ignored
+haproxy h21 -conf-OK {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer bearer
+        token workload-identity
+        google-credentials "file:${tmpdir}/wi.json"
+}
+
+# the HMAC keys are not fetched, and are made of an access key identifier and
+# a secret
+haproxy h22 -conf-BAD {cloudauth section 'p1' : the token source 'metadata-server' cannot be used with the 'sigv4' signer.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer sigv4
+        token metadata-server
+}
+
+haproxy h23 -conf-BAD {'token' : invalid token in 'file:${tmpdir}/hmac-no-secret' : the token of the 'sigv4' signer must be '<access-key-id>:<secret>'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer sigv4
+        token "file:${tmpdir}/hmac-no-secret"
+}
+
+# the token loaded before the signer is checked once the section is parsed
+haproxy h25 -conf-BAD {cloudauth section 'p1' : invalid token : the token of the 'sigv4' signer must be '<access-key-id>:<secret>'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        token "file:${tmpdir}/hmac-no-secret"
+        provider google
+        signer sigv4
+}
+
+# a valid HMAC key, with a region
+haproxy h24 -conf-OK {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer sigv4
+        region us-central1
+        token cli
+}
+
+# the HMAC keys have no session token
+haproxy h26 -conf-BAD {'token' : invalid token in 'file:${tmpdir}/hmac-session' : the session tokens are not supported, the token of the 'sigv4' signer must be '<access-key-id>:<secret>'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer sigv4
+        token "file:${tmpdir}/hmac-session"
+}
+
+# the parts of the key are joined, then checked
+haproxy h27 -conf-BAD {'token' : invalid token in 'file:${tmpdir}/hmac-no-secret env:GOOGLE_HMAC_SECRET env:GOOGLE_HMAC_SECRET' : the session tokens are not supported, the token of the 'sigv4' signer must be '<access-key-id>:<secret>'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider google
+        signer sigv4
+        token "file:${tmpdir}/hmac-no-secret" env:GOOGLE_HMAC_SECRET env:GOOGLE_HMAC_SECRET
+}

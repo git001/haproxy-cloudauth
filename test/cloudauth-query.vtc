@@ -1,0 +1,61 @@
+varnishtest "The cloudauth filter removes the query string credentials"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH)'"
+feature ignore_unknown_macro
+
+setenv CLOUDAUTH_Q_TOKEN query-token
+
+# the parameters which may carry credentials are removed, even URL-encoded or
+# in a different case, the other ones are kept in their order. No provider
+# header is added.
+server s1 {
+    rxreq
+    expect req.url == "/c/blob?comp=list&prefix=a&b"
+    expect req.http.authorization == "Bearer query-token"
+    expect req.http.x-ms-version == <undef>
+    txresp
+
+    rxreq
+    expect req.url == "/c/blob?"
+    txresp
+
+    rxreq
+    expect req.url == "/c/blob?keep=1"
+    txresp
+} -start
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth p1
+        signer bearer
+        token env:CLOUDAUTH_Q_TOKEN
+    frontend fe
+        bind "fd@${fe}"
+        default_backend be
+    backend be
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s1_port} cloudauth p1
+} -start
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/c/blob?comp=list&sig=evil&SI%67=x&X-Amz-Signature=y&x-goog-credential=w&access_token=z&tn=t&prefix=a&&b&%zz=bad"
+    rxresp
+    expect resp.status == 200
+
+    # all the parameters are removed
+    txreq -url "/c/blob?sv=2022-11-02&sig=evil"
+    rxresp
+    expect resp.status == 200
+
+    # nothing is removed
+    txreq -url "/c/blob?keep=1"
+    rxresp
+    expect resp.status == 200
+} -run

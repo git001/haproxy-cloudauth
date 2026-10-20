@@ -1,0 +1,116 @@
+varnishtest "The cloudauth Azure provider fetches the tokens of the applications with their certificate"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_AZURE)'"
+feature ignore_unknown_macro
+
+# the certificate and the private key of the application, only readable by
+# their owner
+shell {
+    cp "${testdir}/../ssl/certs/common.pem" "${tmpdir}/app.pem"
+    cp "${testdir}/cloudauth-azure-cert-enc.pem" "${tmpdir}/app-enc.pem"
+    chmod 600 "${tmpdir}/app.pem" "${tmpdir}/app-enc.pem"
+}
+
+# the password of the encrypted private key
+setenv CLOUDAUTH_AZ_CERT_PASSWORD "test-password"
+
+# the storage
+server s1 {
+    rxreq
+    expect req.http.authorization == "Bearer cert-token"
+    txresp -body "cert"
+} -start
+
+# The token endpoint of Microsoft Entra ID is played by the "entra" frontend,
+# which verifies the client assertion with the certificate of the
+# application, then checks its header and its claims.
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+        # the test certificate is self-signed
+        httpclient.ssl.verify none
+    traces
+        trace cloudauth sink buf0 level developer start now
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    crt-store app
+        load crt "${testdir}/../ssl/certs/common.pem" jwt on
+    cloudauth app
+        provider azure
+        signer bearer
+        token client-certificate
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-certificate "file:${tmpdir}/app.pem"
+        azure-client-certificate-password no-password
+        azure-authority-host "https://${h1_entra_addr}:${h1_entra_port}"
+    # the same certificate, with an encrypted private key
+    cloudauth app-enc
+        provider azure
+        signer bearer
+        token client-certificate
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-certificate "file:${tmpdir}/app-enc.pem"
+        azure-client-certificate-password env:CLOUDAUTH_AZ_CERT_PASSWORD
+        azure-authority-host "https://${h1_entra_addr}:${h1_entra_port}"
+    frontend entra
+        bind "fd@${entra}" ssl crt ${testdir}/../ssl/certs/common.pem
+        option http-buffer-request
+        http-request set-var(txn.assertion) req.body_param(client_assertion)
+        http-request set-var(txn.exp) var(txn.assertion),jwt_payload_query('$.exp',int)
+        http-request set-var(txn.nbf) var(txn.assertion),jwt_payload_query('$.nbf',int)
+        http-request set-var(txn.lifetime) var(txn.exp),sub(txn.nbf)
+        http-request return status 400 content-type application/json string '{"error":"bad_request"}' unless METH_POST { path /contoso.onmicrosoft.com/oauth2/v2.0/token } { req.body_param(grant_type) -m str client_credentials } { req.body_param(client_id) -m str 11111111-2222-3333-4444-555555555555 }
+        http-request return status 400 content-type application/json string '{"error":"bad_assertion_type"}' unless { req.body_param(client_assertion_type),url_dec -m str urn:ietf:params:oauth:client-assertion-type:jwt-bearer }
+        http-request return status 401 content-type application/json string '{"error":"bad_signature"}' unless { var(txn.assertion),jwt_verify_cert("PS256","@app${testdir}/../ssl/certs/common.pem") -m int 1 }
+        http-request return status 401 content-type application/json string '{"error":"bad_header"}' unless { var(txn.assertion),jwt_header_query('$.alg') -m str PS256 } { var(txn.assertion),jwt_header_query('$.typ') -m str JWT } { var(txn.assertion),jwt_header_query('$.x5t#S256') -m str 0QSuWQD3BoghtjaGcsUdi99A64JeyFxc4z_rV0kc3Co }
+        http-request return status 401 content-type application/json string '{"error":"bad_claims"}' unless { var(txn.assertion),jwt_payload_query('$.aud') -m str "https://${h1_entra_addr}:${h1_entra_port}/contoso.onmicrosoft.com/oauth2/v2.0/token" } { var(txn.assertion),jwt_payload_query('$.iss') -m str 11111111-2222-3333-4444-555555555555 } { var(txn.assertion),jwt_payload_query('$.sub') -m str 11111111-2222-3333-4444-555555555555 } { var(txn.assertion),jwt_payload_query('$.jti') -m reg ^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ } { var(txn.lifetime) -m int 600 }
+        http-request return status 200 content-type application/json string '{"token_type":"Bearer","expires_in":3599,"access_token":"cert-token"}'
+    frontend fe
+        bind "fd@${fe}"
+        # the password of the private key was removed from the environment
+        http-request return status 200 content-type text/plain lf-string "env=%[env(CLOUDAUTH_AZ_CERT_PASSWORD)]" if { path /env }
+        default_backend be_storage
+    backend be_storage
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s1_port} cloudauth app
+} -start
+
+# let the token be fetched
+delay 1
+
+haproxy h1 -cli {
+    send "show cloudauth app"
+    expect ~ "app\tazure\tbearer\tfetch:client-certificate\tvalid\t.*\t-\t-\n"
+
+    send "show cloudauth app-enc"
+    expect ~ "app-enc\tazure\tbearer\tfetch:client-certificate\tvalid\t.*\t-\t-\n"
+}
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/blob"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "cert"
+
+    txreq -url "/env"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "env="
+} -run
+
+# the client assertion and the token are never traced
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "response of the token endpoint : profile=app status=200"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect !~ "eyJ|cert-token|test-password"
+}

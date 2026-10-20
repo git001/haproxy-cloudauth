@@ -1,0 +1,162 @@
+varnishtest "The cloudauth Azure provider fetches the tokens of the managed identities"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_AZURE)'"
+feature ignore_unknown_macro
+
+# App Service endpoint, announced by IDENTITY_ENDPOINT and IDENTITY_HEADER
+server s1 -repeat 5 {
+    rxreq
+    expect req.method == "GET"
+    expect req.url == "/msi/token?api-version=2019-08-01&resource=https%3A%2F%2Fstorage.azure.com%2F&client_id=11111111-2222-3333-4444-555555555555"
+    expect req.http.x-identity-header == "identity-secret"
+    txresp -hdr "Content-Type: application/json" \
+        -body {{"access_token":"app-service-token","expires_on":"4102444800","token_type":"Bearer"}}
+} -start
+
+# IMDS endpoint, the token expires quickly so that it must be refreshed
+server s2 -repeat 10 {
+    rxreq
+    expect req.url == "/imds?api-version=2018-02-01&resource=https%3A%2F%2Fstorage.azure.com%2F"
+    expect req.http.metadata == "true"
+    expect req.http.x-identity-header == <undef>
+    txresp -hdr "Content-Type: application/json" \
+        -body {{"access_token":"imds-token","expires_in":"2","token_type":"Bearer"}}
+} -start
+
+# failing IMDS endpoint
+server s3 -repeat 10 {
+    rxreq
+    txresp -status 400 -hdr "Content-Type: application/json" \
+        -body {{"error":"invalid_request","error_description":"do not report this"}}
+} -start
+
+# IMDS endpoint answering too late, after the timeout of each retry of the HTTP
+# client
+server s6 -repeat 10 {
+    rxreq
+    expect_close
+} -start
+
+# the storage
+server s4 {
+    rxreq
+    expect req.http.authorization == "Bearer app-service-token"
+    expect req.http.x-ms-version == "2026-04-06"
+    txresp -body "app-service"
+} -start
+
+server s5 -repeat 2 {
+    rxreq
+    expect req.http.authorization == "Bearer imds-token"
+    txresp -body "imds"
+} -start
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+        setenv IDENTITY_ENDPOINT "http://${s1_addr}:${s1_port}/msi/token"
+        setenv IDENTITY_HEADER identity-secret
+    traces
+        trace cloudauth sink buf0 level developer start now
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth app-service
+        provider azure
+        signer bearer
+        token managed-identity
+        azure-client-id 11111111-2222-3333-4444-555555555555
+    cloudauth imds
+        provider azure
+        signer bearer
+        token-endpoint "http://${s2_addr}:${s2_port}/imds"
+        token managed-identity
+    cloudauth failing
+        provider azure
+        signer bearer
+        token managed-identity
+        token-endpoint "http://${s3_addr}:${s3_port}/imds"
+    cloudauth slow
+        provider azure
+        signer bearer
+        token managed-identity
+        token-endpoint "http://${s6_addr}:${s6_port}/imds"
+        fetch-timeout 100ms
+        fetch-refresh 30m
+        fetch-max-backoff 10s
+    frontend fe
+        bind "fd@${fe}"
+        # the secret of the App Service endpoint was removed from the environment
+        http-request return status 200 content-type text/plain lf-string "env=%[env(IDENTITY_HEADER)]" if { path /env }
+        use_backend be_imds if { path_beg /imds/ }
+        default_backend be_app
+    backend be_app
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s4_port} cloudauth app-service
+    backend be_imds
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s5_port} cloudauth imds
+} -start
+
+# let the tokens be fetched
+delay 1
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/blob"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "app-service"
+
+    txreq -url "/imds/blob"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "imds"
+
+    txreq -url "/env"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "env="
+} -run
+
+haproxy h1 -cli {
+    send "show cloudauth failing"
+    expect ~ "failing\tazure\tbearer\tfetch:managed-identity\tmissing\t.*\tthe token endpoint answered with status 400 \\(invalid_request\\)\t-\n"
+
+    send "show cloudauth slow"
+    expect ~ "slow\tazure\tbearer\tfetch:managed-identity\tmissing\t.*\tno response from the token endpoint\t-\n"
+
+    send "show cloudauth app-service"
+    expect ~ "app-service\tazure\tbearer\tfetch:managed-identity\tvalid\t2100-01-01T00:00:00Z\t"
+
+    send "set cloudauth credential imds <<\nnew-token\n"
+    expect ~ "The credential of this profile is fetched by HAProxy."
+}
+
+# the IMDS token expires after 2 seconds, it must have been refreshed
+delay 2.5
+
+client c2 -connect ${h1_fe_sock} {
+    txreq -url "/imds/blob"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "imds"
+} -run
+
+# the endpoints are traced, without the secret header nor the tokens
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "App Service endpoint : profile=app-service \\(http://${s1_addr}:${s1_port}/msi/token\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "IMDS endpoint : profile=imds \\(http://${s2_addr}:${s2_port}/imds\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect !~ "identity-secret|app-service-token|imds-token|do not report"
+}

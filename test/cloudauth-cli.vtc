@@ -1,0 +1,140 @@
+varnishtest "The cloudauth credentials may be injected from the CLI and used by dynamic servers"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH)'"
+feature ignore_unknown_macro
+
+# the connections opened for the requests which cannot be authenticated are
+# closed without any request
+server s0 -repeat 2 {
+    expect_close
+} -start
+
+# receives the requests once the credential was injected
+server s1 -repeat 2 {
+    rxreq
+    expect req.url == "/bucket/obj"
+    expect req.http.authorization == "Bearer injected-token"
+    expect req.http.host == "localhost"
+    txresp -body "ok"
+} -start
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+        stats socket "${tmpdir}/h1/stats" level admin
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth injected
+        signer bearer
+        token cli
+    frontend fe
+        bind "fd@${fe}"
+        http-after-response set-header x-cloudauth-error "%[var(txn.cloudauth.error)]" if { var(txn.cloudauth.error) -m found }
+        use_backend be_dyn if { path_beg /dyn }
+        use_backend be_fail if { path_beg /fail }
+        default_backend be
+    backend be
+        http-request set-path /bucket%[path]
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s1_port} cloudauth injected
+    backend be_dyn
+        http-request replace-path ^/dyn(/.*) /bucket\1
+        filter-config cloudauth enabled
+    backend be_fail
+        filter-config cloudauth enabled
+        server srv_fail ipv4@localhost:${s0_port} cloudauth injected
+} -start
+
+# no credential yet: the request is rejected with the reason
+haproxy h1 -cli {
+    send "show cloudauth injected"
+    expect ~ "injected\t-\tbearer\tcli\tmissing\t.*\t-\t-\n"
+
+    # the profiles without token source have no input
+    send "set cloudauth input injected federated-token <<\nvalue\n"
+    expect ~ "No such input for this profile."
+
+    # and their credential cannot be fetched
+    send "update cloudauth credential injected"
+    expect ~ "The credential of this profile is not fetched by HAProxy."
+}
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/fail"
+    rxresp
+    expect resp.status == 503
+    expect resp.http.x-cloudauth-error == "server 'srv_fail' profile 'injected' : no credential"
+} -run
+
+# the credential must be passed as payload
+haproxy h1 -cli {
+    send "set cloudauth credential injected"
+    expect ~ "Missing credential, it must be passed as payload"
+}
+
+client cli1 -connect ${h1_cli_sock} {
+    send "set cloudauth credential injected expires-in 3600 <<"
+    send "\n"
+    send "injected-token"
+    send "\n"
+    send "\n"
+    recv 21
+    expect_close
+} -run
+
+haproxy h1 -cli {
+    send "show cloudauth injected"
+    expect ~ "injected\t-\tbearer\tcli\tvalid\t"
+}
+
+client c2 -connect ${h1_fe_sock} {
+    txreq -url "/obj"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "ok"
+} -run
+
+# a dynamic server may use the profile
+haproxy h1 -cli {
+    send "add server be_dyn/dyn ipv4@localhost:${s1_port} cloudauth injected"
+    expect ~ "New server registered."
+}
+
+haproxy h1 -cli {
+    send "enable server be_dyn/dyn"
+    expect ~ ".*"
+}
+
+client c3 -connect ${h1_fe_sock} {
+    txreq -url "/dyn/obj"
+    rxresp
+    expect resp.status == 200
+} -run
+
+# an already expired JWT is reported as expired and not used
+client cli2 -connect ${h1_cli_sock} {
+    send "set cloudauth credential injected <<"
+    send "\n"
+    # {"alg":"none"}.{"exp":1700000000}
+    send "eyJhbGciOiJub25lIn0.eyJleHAiOjE3MDAwMDAwMDB9.c2ln"
+    send "\n"
+    send "\n"
+    recv 21
+    expect_close
+} -run
+
+haproxy h1 -cli {
+    send "show cloudauth injected"
+    expect ~ "injected\t-\tbearer\tcli\texpired\t2023-11-14T22:13:20Z\t-\t"
+}
+
+client c4 -connect ${h1_fe_sock} {
+    txreq -url "/fail"
+    rxresp
+    expect resp.status == 503
+    expect resp.http.x-cloudauth-error == "server 'srv_fail' profile 'injected' : credential expired"
+} -run

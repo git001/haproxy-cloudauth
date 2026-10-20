@@ -1,0 +1,132 @@
+varnishtest "The cloudauth S3 provider fetches the access keys of the EC2 instances"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_S3)'"
+feature ignore_unknown_macro
+
+# the credentials of the role of the instance
+shell {
+    printf '{"Code":"Success","LastUpdated":"2026-10-18T12:00:00Z","Type":"AWS-HMAC","AccessKeyId":"ASIAINSTANCEEXAMPLE","SecretAccessKey":"instance-secret","Token":"instance/session+token=","Expiration":"2100-01-01T00:00:00Z"}\n' > "${tmpdir}/creds.json"
+}
+
+# the Instance Metadata Service is played by h2: the session token is
+# returned by a PUT with its lifetime and without X-Forwarded-For, and the
+# role and its credentials are only returned with this token. Other path
+# prefixes play an instance without role, and one whose role would make the
+# next request leave the path of the credentials.
+haproxy h2 -conf {
+    global
+        nbthread 1
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    frontend imds
+        bind "fd@${imds}"
+        # the requests have no payload, not even an empty chunked one
+        http-request return status 400 if { req.hdr(x-forwarded-for) -m found }
+        http-request return status 400 if { req.hdr(transfer-encoding) -m found }
+        http-request return status 200 content-type text/plain string "imds-session-token" if { method PUT } { path /latest/api/token /norole/latest/api/token /badrole/latest/api/token } { req.hdr(x-aws-ec2-metadata-token-ttl-seconds) -m str 300 } { req.body_size eq 0 }
+        http-request return status 401 unless { req.hdr(x-aws-ec2-metadata-token) -m str imds-session-token } { method GET }
+        http-request return status 404 if { path_beg /norole/ }
+        http-request return status 200 content-type text/plain string "../../user-data" if { path /badrole/latest/meta-data/iam/security-credentials/ }
+        http-request return status 200 content-type text/plain string "web-role" if { path /latest/meta-data/iam/security-credentials/ }
+        http-request return status 200 content-type application/json file "${tmpdir}/creds.json" if { path /latest/meta-data/iam/security-credentials/web-role }
+        http-request return status 404
+} -start
+
+# the storage, which receives the access key and its session token
+server s1 {
+    rxreq
+    expect req.http.authorization ~ "^AWS4-HMAC-SHA256 Credential=ASIAINSTANCEEXAMPLE/[0-9]{8}/eu-west-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=[0-9a-f]{64}$"
+    expect req.http.x-amz-security-token == "instance/session+token="
+    txresp -body "instance"
+} -start
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+    traces
+        trace cloudauth sink buf0 level developer start now
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    # the trailing slash of the endpoint is ignored
+    cloudauth instance
+        provider s3
+        signer sigv4
+        region eu-west-1
+        token instance-metadata
+        token-endpoint "http://${h2_imds_addr}:${h2_imds_port}/"
+    cloudauth norole
+        provider s3
+        signer sigv4
+        region eu-west-1
+        token instance-metadata
+        token-endpoint "http://${h2_imds_addr}:${h2_imds_port}/norole"
+        fetch-max-backoff 10s
+    cloudauth badrole
+        provider s3
+        signer sigv4
+        region eu-west-1
+        token instance-metadata
+        token-endpoint "http://${h2_imds_addr}:${h2_imds_port}/badrole"
+        fetch-max-backoff 10s
+    frontend fe
+        bind "fd@${fe}"
+        default_backend be
+    backend be
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s1_port} cloudauth instance
+} -start
+
+# let the access keys be fetched
+delay 1
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/bucket/object"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "instance"
+} -run
+
+haproxy h1 -cli {
+    send "show cloudauth instance"
+    expect ~ "instance\ts3\tsigv4\tfetch:instance-metadata\tvalid\t2100-01-01T00:00:00Z\t"
+
+    send "show cloudauth norole"
+    expect ~ "norole\ts3\tsigv4\tfetch:instance-metadata\tmissing\t.*\tno IAM role is attached to the instance\t-\n"
+
+    send "show cloudauth badrole"
+    expect ~ "badrole\ts3\tsigv4\tfetch:instance-metadata\tmissing\t.*\tinvalid IAM role from the instance metadata service\t-\n"
+}
+
+# the three requests and the role are traced, but neither the session token
+# nor the credentials
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "instance metadata service request : profile=instance \\(http://${h2_imds_addr}:${h2_imds_port}/latest/api/token\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "IAM role of the instance : profile=instance \\(web-role\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "instance metadata service request : profile=instance \\(http://${h2_imds_addr}:${h2_imds_port}/latest/meta-data/iam/security-credentials/web-role\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "next request of the fetch : profile=instance \\(2\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect !~ "imds-session-token|instance-secret|session\\+token"
+}

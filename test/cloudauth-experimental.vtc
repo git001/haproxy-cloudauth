@@ -1,0 +1,13 @@
+varnishtest "The cloudauth filter must be allowed via expose-experimental-directives"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH)'"
+feature ignore_unknown_macro
+
+haproxy h1 -conf-BAD {'filter-config cloudauth' is experimental, must be allowed via a global 'expose-experimental-directives'} {
+    defaults
+        mode http
+
+    backend be
+        filter-config cloudauth enabled
+        server srv 127.0.0.1:80
+}

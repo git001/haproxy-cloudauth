@@ -1,0 +1,161 @@
+varnishtest "The cloudauth Azure provider fetches the tokens of the workload identities"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_AZURE)'"
+feature ignore_unknown_macro
+
+# federated tokens (JWT) expiring on 2100-01-01, and one already expired
+shell {
+    printf '%s\n' "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.ZmlsZS1zaWc" > "${tmpdir}/federated-token"
+    chmod 600 "${tmpdir}/federated-token"
+}
+
+# Microsoft Entra ID, behind the TLS frontend of h1: the federated token read
+# from the file is the client assertion
+server s1 -repeat 3 {
+    rxreq
+    expect req.method == "POST"
+    expect req.url == "/contoso.onmicrosoft.com/oauth2/v2.0/token"
+    expect req.http.content-type == "application/x-www-form-urlencoded"
+    expect req.body == "grant_type=client_credentials&client_id=11111111-2222-3333-4444-555555555555&client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer&client_assertion=eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.ZmlsZS1zaWc&scope=https%3A%2F%2Fstorage.azure.com%2F.default"
+    txresp -hdr "Content-Type: application/json" \
+        -body {{"token_type":"Bearer","expires_in":3599,"access_token":"wi-token"}}
+} -start
+
+# the federated token injected from the CLI is the client assertion
+server s2 -repeat 3 {
+    rxreq
+    expect req.body ~ "&client_assertion=eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.Y2xpLXNpZw&"
+    txresp -hdr "Content-Type: application/json" \
+        -body {{"token_type":"Bearer","expires_in":3599,"access_token":"late-token"}}
+} -start
+
+# the storage
+server s3 {
+    rxreq
+    expect req.http.authorization == "Bearer wi-token"
+    txresp -body "wi"
+} -start
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+        # the test certificate is self-signed
+        httpclient.ssl.verify none
+    traces
+        trace cloudauth sink buf0 level developer start now
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth wi
+        provider azure
+        signer bearer
+        token workload-identity
+        input federated-token "file:${tmpdir}/federated-token"
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-authority-host "https://${h1_entra_addr}:${h1_entra_port}"
+    cloudauth late
+        provider azure
+        signer bearer
+        token workload-identity
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-authority-host "https://${h1_late_addr}:${h1_late_port}"
+    frontend entra
+        bind "fd@${entra}" ssl crt ${testdir}/../ssl/certs/common.pem
+        default_backend be_entra
+    frontend late
+        bind "fd@${late}" ssl crt ${testdir}/../ssl/certs/common.pem
+        default_backend be_late
+    backend be_entra
+        server s1 ${s1_addr}:${s1_port}
+    backend be_late
+        server s2 ${s2_addr}:${s2_port}
+    frontend fe
+        bind "fd@${fe}"
+        default_backend be_storage
+    backend be_storage
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s3_port} cloudauth wi
+} -start
+
+# let the tokens be fetched
+delay 1
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/blob"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "wi"
+} -run
+
+# the input is injected between two attempts to fetch the token, made after
+# 1 and 3 seconds
+delay 0.5
+
+haproxy h1 -cli {
+    send "show cloudauth wi"
+    expect ~ "wi\tazure\tbearer\tfetch:workload-identity\tvalid\t.*\t-\tfederated-token:valid:2100-01-01T00:00:00Z\n"
+
+    # without federated token, the token cannot be fetched
+    send "show cloudauth late"
+    expect ~ "late\tazure\tbearer\tfetch:workload-identity\tmissing\t.*\tthe input 'federated-token' is missing\tfederated-token:missing:-\n"
+
+    send "set cloudauth input late federated-token <<\neyJhbGciOiJSUzI1NiJ9.eyJleHAiOjE3MDAwMDAwMDB9.b2xkLXNpZw\n"
+    expect ~ "Invalid input: the input already expired."
+
+    send "set cloudauth input late nope <<\neyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.Y2xpLXNpZw\n"
+    expect ~ "No such input for this profile."
+
+    # a new federated token is used at once
+    send "set cloudauth input late federated-token <<\neyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.Y2xpLXNpZw\n"
+    expect ~ "Input updated."
+}
+
+delay 0.5
+
+haproxy h1 -cli {
+    send "show cloudauth late"
+    expect ~ "late\tazure\tbearer\tfetch:workload-identity\tvalid\t.*\t-\tfederated-token:valid:2100-01-01T00:00:00Z\n"
+}
+
+# the federated tokens and the tokens are never traced
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "input updated from the CLI : profile=late \\(federated-token\\)"
+}
+
+# the fetching is traced on entry and exit at the developer level, the
+# request without federated token and the expired input failing
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_azure_entra_request\\(\\): leaving : profile=wi"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_azure_token_response\\(\\): leaving : profile=wi"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_fetch_done\\(\\): leaving : profile=wi"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_fetch_send\\(\\): leaving on error : profile=late"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_set_input\\(\\): leaving on error : profile=late"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect !~ "ZmlsZS1zaWc|Y2xpLXNpZw|b2xkLXNpZw|wi-token|late-token"
+}

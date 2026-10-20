@@ -1,0 +1,109 @@
+# ---- from doc/management.txt, set anon [on|off] [<key>]
+set cloudauth credential <profile> [expires-in <delay> | expires-at <date>]
+  Replace the credential of the cloudauth profile <profile> by the one passed
+  as payload (see "Payload" above). This command is only available when
+  HAProxy was built with USE_CLOUDAUTH. It is the only way to provide the
+  credential of a profile declared with "token cli", and it may also be used
+  to replace a credential loaded from the environment or from a file, for
+  instance to rotate it without a restart. An external tool, like a sidecar
+  in Kubernetes, may use it to push short-lived tokens. It is rejected for the
+  profiles whose credential is fetched by HAProxy from a token source, since
+  it would be replaced at the next fetch.
+
+  The credential expires after <delay> with "expires-in", expressed in seconds
+  by default or with a unit (for instance "90m" or "1h", see section 2.5 of
+  the configuration manual), or at <date>, expressed as a number of seconds
+  since the Epoch, with "expires-at". Without these options, the credential
+  expires at the date of its "exp" claim if it is a JWT, otherwise it does
+  not expire. An expired credential is not used anymore. The trailing spaces
+  and line feeds of the payload are ignored, and the credential must only
+  contain visible ASCII characters, otherwise it is rejected and the previous
+  one is kept. The credential is never echoed. With the "sigv4" signer, the
+  credential is the access key in a single payload, as
+  "<access-key-id>:<secret>" or "<access-key-id>:<secret>:<session-token>",
+  even if the configuration reads its parts separately, so that the whole key
+  is replaced at once.
+
+  Note that the injected credentials are not kept across reloads, so the
+  tool injecting them must push them again after a reload.
+
+  Example:
+    $ echo -e "set cloudauth credential gcs expires-in 1h <<\n$TOKEN\n" | \
+        socat stdio /tmp/sock1
+    Credential updated.
+
+set cloudauth input <profile> <name>
+  Replace the input <name> of the token source of the cloudauth profile
+  <profile> by the one passed as payload (see "Payload" above). This command is
+  only available when HAProxy was built with USE_CLOUDAUTH. The inputs are the
+  secrets that HAProxy exchanges for a credential, such as the federated token
+  of an Azure, a Google Cloud or an AWS workload identity ("federated-token"),
+  or the token of the service account of an EKS Pod Identity
+  ("authorization-token"), which expire and are renewed outside of HAProxy.
+  Since HAProxy never reads files at runtime, an external tool, like a sidecar
+  in Kubernetes, must push each new input before the previous one expires. If
+  the credential of the profile is not valid or the last attempt to fetch it
+  failed, a new attempt is made at once.
+
+  The trailing spaces and line feeds of the payload are ignored, and the input
+  must only contain visible ASCII characters. An input which is a JWT is not
+  used after the date of its "exp" claim, and it is rejected if this date is
+  already passed. On error, the previous input is kept. The input is never
+  echoed. Like the credentials, the injected inputs are not kept across
+  reloads, the ones loaded from the configuration with "input" being used
+  again.
+
+  Example:
+    $ echo -e "set cloudauth input azure-wi federated-token <<\n$(cat $AZURE_FEDERATED_TOKEN_FILE)\n" | \
+        socat stdio /tmp/sock1
+    Input updated.
+
+
+# ---- from doc/management.txt, show cache
+show cloudauth [<profile>]
+  Dump the state of the cloudauth credential profiles, or of the profile
+  <profile> only. This command is only available when HAProxy was built with
+  USE_CLOUDAUTH. The credentials themselves are never reported. The fields are
+  separated by tabs:
+
+  - name of the profile
+  - storage provider, or "-" if none
+  - signer
+  - source of the credential: "env:<variable>", "file:<path>", "cli" or
+    "fetch:<token source>"
+  - state of the credential: "missing", "valid" or "expired"
+  - expiration date of the credential, or "-" if it does not expire
+  - remaining validity in seconds, or "-"
+  - date of the last update of the credential, or "-" if it was never loaded
+  - date of the next fetch of a credential fetched by HAProxy, or "-"
+  - reason of the last failure to fetch the credential, or "-" if the last
+    fetch succeeded
+  - inputs of the token source, as "<name>:<state>:<expiration date>"
+    separated by commas, the state being "missing", "valid" or "expired", or
+    "-" if it has no input
+
+  Example:
+    $ echo "show cloudauth" | socat stdio /tmp/sock1
+    # name	provider	signer	source	state	expiration date (UTC)	expires in	last update (UTC)	next fetch (UTC)	last error	inputs
+    gcs	-	bearer	env:GCS_TOKEN	valid	-	-	2026-10-16T20:30:46Z	-	-	-
+    azure	azure	sas	cli	missing	-	-	-	-	-	-
+    azure-mi	azure	bearer	fetch:managed-identity	valid	2026-10-17T21:30:46Z	43200s	2026-10-17T09:30:46Z	2026-10-17T15:30:46Z	-	-
+    azure-wi	azure	bearer	fetch:workload-identity	valid	2026-10-17T10:30:46Z	3600s	2026-10-17T09:30:46Z	2026-10-17T10:00:46Z	-	federated-token:valid:2026-10-17T10:20:00Z
+
+
+# ---- from doc/management.txt, trace <source> [<args...>]
+update cloudauth credential <profile>
+  Fetch at once the credential of the cloudauth profile <profile> from its
+  token source (see "token <source>" in the configuration manual), even if the
+  current one is still valid, for instance after a change of the permissions
+  of the identity, or to check the token endpoint. This command is only
+  available when HAProxy was built with USE_CLOUDAUTH, and requires the admin
+  level. The fetch is asynchronous: the current credential is used until a
+  new one is fetched, and the result is reported by "show cloudauth" and by
+  the logs on failure. It is rejected for the profiles whose credential is not
+  fetched by HAProxy, and does nothing while a fetch is already in progress.
+
+  Example:
+    $ echo "update cloudauth credential azure-mi" | socat stdio /tmp/sock1
+    Fetch requested, see "show cloudauth" for its result.
+

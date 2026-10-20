@@ -1,0 +1,145 @@
+varnishtest "The cloudauth Google provider fetches the tokens of the service accounts"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_GOOGLE)'"
+feature ignore_unknown_macro
+
+# the storage
+server s1 {
+    rxreq
+    expect req.http.authorization == "Bearer sa-token"
+    txresp -body "sa"
+} -start
+
+server s2 {
+    rxreq
+    expect req.http.authorization == "Bearer scoped-token"
+    txresp -body "scoped"
+} -start
+
+# The token endpoint of Google is played by h2, which verifies the assertion
+# with the certificate of the key of the service account, then checks its
+# header and its claims. The scopes select the token.
+haproxy h2 -conf {
+    global
+        nbthread 1
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    crt-store sa
+        load crt "${testdir}/../ssl/certs/common.pem" jwt on
+    frontend oauth
+        bind "fd@${oauth}" ssl crt ${testdir}/../ssl/certs/common.pem
+        option http-buffer-request
+        http-request set-var(txn.assertion) req.body_param(assertion)
+        http-request set-var(txn.exp) var(txn.assertion),jwt_payload_query('$.exp',int)
+        http-request set-var(txn.iat) var(txn.assertion),jwt_payload_query('$.iat',int)
+        http-request set-var(txn.lifetime) var(txn.exp),sub(txn.iat)
+        http-request set-var-fmt(txn.url) "https://${h2_oauth_addr}:${h2_oauth_port}%[path]"
+        http-request set-var(txn.aud) var(txn.assertion),jwt_payload_query('$.aud')
+        http-request set-var(txn.scope) var(txn.assertion),jwt_payload_query('$.scope')
+        http-request return status 400 content-type application/json string '{"error":"bad_request"}' unless METH_POST { req.hdr(content-type) -m beg application/x-www-form-urlencoded } { req.body_param(grant_type),url_dec -m str urn:ietf:params:oauth:grant-type:jwt-bearer }
+        http-request return status 401 content-type application/json string '{"error":"bad_signature"}' unless { var(txn.assertion),jwt_verify_cert("RS256","@sa${testdir}/../ssl/certs/common.pem") -m int 1 }
+        http-request return status 401 content-type application/json string '{"error":"bad_header"}' unless { var(txn.assertion),jwt_header_query('$.alg') -m str RS256 } { var(txn.assertion),jwt_header_query('$.typ') -m str JWT } { var(txn.assertion),jwt_header_query('$.kid') -m str key-id-1 }
+        http-request return status 401 content-type application/json string '{"error":"bad_claims"}' unless { var(txn.assertion),jwt_payload_query('$.iss') -m str sa@project.iam.gserviceaccount.com } { var(txn.aud),strcmp(txn.url) eq 0 } { var(txn.lifetime) -m int 3600 }
+        http-request return status 200 content-type application/json string '{"access_token":"sa-token","expires_in":3599,"token_type":"Bearer"}' if { path /token } { var(txn.scope) -m str https://www.googleapis.com/auth/devstorage.read_only }
+        http-request return status 200 content-type application/json string '{"access_token":"scoped-token","expires_in":3599,"token_type":"Bearer"}' if { path /override } { var(txn.scope) -m str "https://www.googleapis.com/auth/devstorage.read_write https://www.googleapis.com/auth/cloud-platform" }
+        http-request return status 400 content-type application/json string '{"error":"invalid_scope","error_description":"do not report this"}'
+} -start
+
+# the credential file of the service account, only readable by its owner, its
+# token endpoint being h2
+shell {
+    key=$(sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/../ssl/certs/common.pem" | awk '{ printf "%s\\n", $0 }')
+    printf '{"type":"service_account","project_id":"project","private_key_id":"key-id-1","private_key":"%s","client_email":"sa@project.iam.gserviceaccount.com","client_id":"123456789","token_uri":"https://%s:%s/token"}\n' \
+        "$key" "${h2_oauth_addr}" "${h2_oauth_port}" > "${tmpdir}/sa.json"
+    chmod 600 "${tmpdir}/sa.json"
+}
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+        # the test certificate is self-signed
+        httpclient.ssl.verify none
+    traces
+        trace cloudauth sink buf0 level developer start now
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    # the token endpoint of the credential file, the default scope
+    cloudauth sa
+        provider google
+        signer bearer
+        token service-account
+        google-credentials "file:${tmpdir}/sa.json"
+    # another token endpoint, other scopes
+    cloudauth scoped
+        provider google
+        signer bearer
+        token service-account
+        google-credentials "file:${tmpdir}/sa.json"
+        token-endpoint "https://${h2_oauth_addr}:${h2_oauth_port}/override"
+        token-scopes https://www.googleapis.com/auth/devstorage.read_write https://www.googleapis.com/auth/cloud-platform
+    # a scope refused by the token endpoint
+    cloudauth denied
+        provider google
+        signer bearer
+        token service-account
+        google-credentials "file:${tmpdir}/sa.json"
+        token-scopes https://example.com/denied
+        fetch-max-backoff 10s
+    frontend fe
+        bind "fd@${fe}"
+        use_backend be_scoped if { path_beg /scoped/ }
+        default_backend be_sa
+    backend be_sa
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s1_port} cloudauth sa
+    backend be_scoped
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s2_port} cloudauth scoped
+} -start
+
+# let the tokens be fetched
+delay 1
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/bucket/object"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "sa"
+
+    txreq -url "/scoped/object"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "scoped"
+} -run
+
+haproxy h1 -cli {
+    send "show cloudauth denied"
+    expect ~ "denied\tgoogle\tbearer\tfetch:service-account\tmissing\t.*\tthe token endpoint answered with status 400 \\(invalid_scope\\)\t-\n"
+
+    send "show cloudauth sa"
+    expect ~ "sa\tgoogle\tbearer\tfetch:service-account\tvalid\t"
+}
+
+# the token endpoint is traced, without the assertion, the tokens nor the
+# error description
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "token endpoint : profile=sa \\(https://${h2_oauth_addr}:${h2_oauth_port}/token\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "token endpoint : profile=scoped \\(https://${h2_oauth_addr}:${h2_oauth_port}/override\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect !~ "sa-token|scoped-token|eyJ|PRIVATE|do not report"
+}

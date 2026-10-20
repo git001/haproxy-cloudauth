@@ -1,0 +1,114 @@
+varnishtest "The cloudauth traces report the authentication without the credentials"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH)'"
+feature ignore_unknown_macro
+
+setenv CLOUDAUTH_TRACE_TOKEN "profile-secret-token"
+
+server s1 {
+    rxreq
+    expect req.http.authorization == "Bearer profile-secret-token"
+    expect req.url == "/blob?keep=1"
+    txresp
+} -start
+
+haproxy h1 -conf {
+    global
+        expose-experimental-directives
+    traces
+        trace cloudauth sink buf0 level developer start now
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth p1
+        signer bearer
+        token env:CLOUDAUTH_TRACE_TOKEN
+    cloudauth p2
+        signer bearer
+        token cli
+    frontend fe
+        bind "fd@${fe}"
+        use_backend be_p2 if { path_beg /p2/ }
+        default_backend be
+    backend be
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s1_port} cloudauth p1
+    backend be_p2
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s1_port} cloudauth p2
+} -start
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/blob?access_token=client-secret-query&keep=1" -hdr "Authorization: Bearer client-secret-header"
+    rxresp
+    expect resp.status == 200
+
+    # the profile has no credential yet
+    txreq -url "/p2/blob"
+    rxresp
+    expect resp.status >= 500
+} -run
+
+haproxy h1 -cli {
+    send "set cloudauth credential p2 <<\ncli-secret-token\n"
+    expect ~ "Credential updated."
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "client credential header removed : profile=p1 \\(authorization\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "client credential parameter removed : profile=p1 \\(access_token\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "Host header set : profile=p1 \\(localhost\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "request authenticated : profile=p1"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "request not authenticated : profile=p2 \\(no credential\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "credential updated from the CLI, expires : profile=p2 \\(never\\)"
+}
+
+# the functions are traced on entry and exit at the developer level
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_authenticate\\(\\): entering : profile=p1"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_authenticate\\(\\): leaving : profile=p1"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_sign_request\\(\\): leaving on error : profile=p2"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_set_token\\(\\): leaving : profile=p2"
+}
+
+# the credentials of the profile and of the client are never traced
+haproxy h1 -cli {
+    send "show events buf0"
+    expect !~ "secret"
+}

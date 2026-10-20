@@ -1,0 +1,111 @@
+varnishtest "The cloudauth filter authenticates the request for its final server, also on retries"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH)'"
+feature ignore_unknown_macro
+
+setenv CLOUDAUTH_TOKEN_A token-a
+setenv CLOUDAUTH_TOKEN_B token-b
+
+barrier b_retry cond 2
+
+# plain request, the client credentials must be replaced
+server s0 {
+    rxreq
+    expect req.url == "/bucket-a/obj"
+    expect req.http.authorization == "Bearer token-a"
+    expect req.http.x-amz-date == <undef>
+    expect req.http.host == "localhost"
+    txresp -body "plain"
+} -start
+
+# L7 retry: the request must be authenticated again for the second server
+server s1 {
+    rxreq
+    expect req.url == "/l7"
+    expect req.http.authorization == "Bearer token-a"
+    txresp -status 503 -body "retry me"
+    barrier b_retry sync
+} -start
+
+server s2 {
+    rxreq
+    expect req.url == "/l7"
+    expect req.http.authorization == "Bearer token-b"
+    barrier b_retry sync
+    txresp -body "l7 retry"
+} -start
+
+# connection failure then redispatch
+server s3 {
+    rxreq
+    expect req.url == "/conn"
+    expect req.http.authorization == "Bearer token-b"
+    txresp -body "redispatch"
+} -start
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth tok-a
+        signer bearer
+        token env:CLOUDAUTH_TOKEN_A
+    cloudauth tok-b
+        signer bearer
+        token env:CLOUDAUTH_TOKEN_B
+    frontend fe
+        bind "fd@${fe}"
+        http-after-response set-header x-retries "%[txn.conn_retries]"
+        http-after-response set-header x-redispatched "%[txn.redispatched]"
+        use_backend be_l7 if { path /l7 }
+        use_backend be_conn if { path /conn }
+        default_backend be_plain
+    backend be_plain
+        http-request set-path /bucket-a%[path]
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s0_port} cloudauth tok-a
+    backend be_l7
+        balance first
+        retries 1
+        retry-on 503
+        option redispatch
+        filter-config cloudauth enabled
+        server bad ipv4@localhost:${s1_port} cloudauth tok-a
+        server good ipv4@localhost:${s2_port} cloudauth tok-b
+    backend be_conn
+        balance first
+        retries 1
+        option redispatch
+        filter-config cloudauth enabled
+        server dead ipv4@localhost:1 cloudauth tok-a
+        server alive ipv4@localhost:${s3_port} cloudauth tok-b
+} -start
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/obj" -hdr "authorization: Basic c3Bvb2Zl" -hdr "x-amz-date: 20260101T000000Z"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "plain"
+} -run
+
+client c2 -connect ${h1_fe_sock} {
+    txreq -url "/l7"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.x-retries == "1"
+    expect resp.http.x-redispatched == "1"
+    expect resp.body == "l7 retry"
+} -run
+
+client c3 -connect ${h1_fe_sock} {
+    txreq -url "/conn"
+    rxresp
+    expect resp.status == 200
+    expect resp.http.x-redispatched == "1"
+    expect resp.body == "redispatch"
+} -run

@@ -1,0 +1,46 @@
+varnishtest "The cloudauth secrets are removed from the environment"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH)'"
+feature ignore_unknown_macro
+
+setenv CLOUDAUTH_ENV_TOKEN env-token
+
+server s1 {
+    rxreq
+    expect req.http.authorization == "Bearer env-token"
+    txresp
+} -start
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth p1
+        signer bearer
+        token env:CLOUDAUTH_ENV_TOKEN
+    frontend fe
+        bind "fd@${fe}"
+        # the variable was removed once the configuration was parsed
+        http-request return status 200 content-type text/plain lf-string "env=%[env(CLOUDAUTH_ENV_TOKEN)]" if { path /env }
+        default_backend be
+    backend be
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s1_port} cloudauth p1
+} -start
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/env"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "env="
+
+    # the token read before is still used
+    txreq -url "/blob"
+    rxresp
+    expect resp.status == 200
+} -run

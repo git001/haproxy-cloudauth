@@ -1,0 +1,13 @@
+haproxy-cloudauth license
+=========================
+
+The haproxy-cloudauth filter follows the license model of HAProxy:
+
+  - the files in src/ are covered by the GNU General Public License, version 2
+    or (at your option) any later version, see doc/gpl.txt;
+
+  - the files in include/ are covered by the GNU Lesser General Public
+    License, version 2.1 or (at your option) any later version, see
+    doc/lgpl.txt.
+
+Each file carries its own license notice, which prevails.

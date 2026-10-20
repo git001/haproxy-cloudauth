@@ -1,0 +1,185 @@
+varnishtest "The cloudauth S3 provider signs the requests with the access keys"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_S3)'"
+feature ignore_unknown_macro
+
+# the access key of the AWS documentation, as "<access-key-id>:<secret>",
+# and a temporary access key whose parts are read separately, as usually
+# provided
+shell {
+    printf '%s\n' "AKIAIOSFODNN7EXAMPLE:wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" > "${tmpdir}/access-key"
+    printf '%s\n' "ASIATEMPORARYEXAMPLE" > "${tmpdir}/access-key-id"
+    chmod 600 "${tmpdir}/access-key" "${tmpdir}/access-key-id"
+}
+
+setenv AWS_SECRET_ACCESS_KEY c2Vzc2lvbi1zZWNyZXQta2V5LWZvci10aGUtdGVzdHM
+setenv AWS_SESSION_TOKEN IQoJb3JpZ2luX2VjEXAMPLE+/PARTS=
+
+# S3 is played by h2, which computes the signature again with its own
+# converters from the expected canonical URI, canonical query string and
+# region given by the client, and from the signing key of the access key
+# identifier, derived from the secret prefixed by "AWS4" (in base64 below).
+# The session token is signed when present.
+haproxy h2 -conf {
+    global
+        nbthread 1
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    frontend s3
+        bind "fd@${s3}"
+        http-request set-var(txn.date) req.hdr(x-amz-date)
+        http-request set-var(txn.day) var(txn.date),bytes(0,8)
+        http-request set-var(txn.region) req.hdr(x-test-region)
+        http-request set-var(txn.id) req.fhdr(authorization),word(2,' '),field(1,/),bytes(11)
+        http-request set-var(txn.k0) str(QVdTNHdKYWxyWFV0bkZFTUkvSzdNREVORy9iUHhSZmlDWUVYQU1QTEVLRVk=) if { var(txn.id) -m str AKIAIOSFODNN7EXAMPLE }
+        http-request set-var(txn.k0) str(QVdTNGMyVnpjMmx2YmkxelpXTnlaWFF0YTJWNUxXWnZjaTEwYUdVdGRHVnpkSE0=) if { var(txn.id) -m str ASIATEMPORARYEXAMPLE }
+        http-request set-var(txn.k1) var(txn.day),hmac(sha256,txn.k0),base64
+        http-request set-var(txn.k2) var(txn.region),hmac(sha256,txn.k1),base64
+        http-request set-var(txn.k3) str(s3),hmac(sha256,txn.k2),base64
+        http-request set-var(txn.k4) str(aws4_request),hmac(sha256,txn.k3),base64
+        http-request set-var-fmt(txn.creq) "%[method]\n%[req.hdr(x-test-uri)]\n%[req.hdr(x-test-query)]\nhost:%[req.hdr(host)]\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:%[var(txn.date)]\n\nhost;x-amz-content-sha256;x-amz-date\nUNSIGNED-PAYLOAD"
+        http-request set-var(txn.signed) str(host;x-amz-content-sha256;x-amz-date)
+        http-request set-var-fmt(txn.creq) "%[method]\n%[req.hdr(x-test-uri)]\n%[req.hdr(x-test-query)]\nhost:%[req.hdr(host)]\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:%[var(txn.date)]\nx-amz-security-token:%[req.hdr(x-amz-security-token)]\n\nhost;x-amz-content-sha256;x-amz-date;x-amz-security-token\nUNSIGNED-PAYLOAD" if { req.hdr(x-amz-security-token) -m found }
+        http-request set-var(txn.signed) str(host;x-amz-content-sha256;x-amz-date;x-amz-security-token) if { req.hdr(x-amz-security-token) -m found }
+        http-request set-var-fmt(txn.sts) "AWS4-HMAC-SHA256\n%[var(txn.date)]\n%[var(txn.day)]/%[var(txn.region)]/s3/aws4_request\n%[var(txn.creq),sha2(256),hex,lower]"
+        http-request set-var(txn.sig) var(txn.sts),hmac(sha256,txn.k4),hex,lower
+        http-request set-var-fmt(txn.auth) "AWS4-HMAC-SHA256 Credential=%[var(txn.id)]/%[var(txn.day)]/%[var(txn.region)]/s3/aws4_request, SignedHeaders=%[var(txn.signed)], Signature=%[var(txn.sig)]"
+        http-request return status 400 content-type text/plain string "bad headers" unless { req.hdr(x-amz-date) -m reg ^[0-9]{8}T[0-9]{6}Z$ } { req.hdr(x-amz-content-sha256) -m str UNSIGNED-PAYLOAD } { req.hdr_cnt(x-amz-date) -m int 1 } { req.fhdr_cnt(authorization) -m int 1 } !{ req.hdr(x-amz-acl) -m found }
+        http-request return status 200 content-type text/plain lf-string "%[var(txn.id)];%[req.hdr(x-amz-security-token)]" if { req.fhdr(authorization),strcmp(txn.auth) eq 0 }
+        http-request return status 403 content-type text/plain lf-string "%[var(txn.creq)]"
+} -start
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+    traces
+        trace cloudauth sink buf0 level developer start now
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth s3
+        provider s3
+        signer sigv4
+        region us-east-1
+        token "file:${tmpdir}/access-key"
+    # the parts are joined as "<access-key-id>:<secret>:<session-token>"
+    cloudauth parts
+        provider s3
+        signer sigv4
+        region eu-west-1
+        token "file:${tmpdir}/access-key-id" env:AWS_SECRET_ACCESS_KEY env:AWS_SESSION_TOKEN
+    frontend fe
+        bind "fd@${fe}"
+        # the path is doubled 7 times, up to 8192 '+' characters, which are
+        # each encoded as "%2B" in the canonical request
+        http-request set-path %[path]%[path] if { path_beg /long/ }
+        http-request set-path %[path]%[path] if { path_beg /long/ }
+        http-request set-path %[path]%[path] if { path_beg /long/ }
+        http-request set-path %[path]%[path] if { path_beg /long/ }
+        http-request set-path %[path]%[path] if { path_beg /long/ }
+        http-request set-path %[path]%[path] if { path_beg /long/ }
+        http-request set-path %[path]%[path] if { path_beg /long/ }
+        use_backend be_parts if { path_beg /parts/ }
+        default_backend be_s3
+    backend be_s3
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${h2_s3_port} cloudauth s3
+    backend be_parts
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${h2_s3_port} cloudauth parts
+} -start
+
+client c1 -connect ${h1_fe_sock} {
+    # the signature headers of the client are replaced
+    txreq -url "/bucket/object" -hdr "x-test-uri: /bucket/object" -hdr "x-test-query: " \
+        -hdr "x-test-region: us-east-1" -hdr "Authorization: AWS4-HMAC-SHA256 Credential=client" \
+        -hdr "x-amz-date: 20000101T000000Z" -hdr "x-amz-security-token: client" -hdr "x-amz-acl: public-read"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "AKIAIOSFODNN7EXAMPLE;"
+
+    # the path is encoded once, the query string parameters are sorted
+    txreq -url "/bucket/photos/2026%20summer/a+b.jpg?list-type=2&prefix=photos%2F&delimiter=%2F" \
+        -hdr "x-test-uri: /bucket/photos/2026%20summer/a%2Bb.jpg" \
+        -hdr "x-test-query: delimiter=%2F&list-type=2&prefix=photos%2F" \
+        -hdr "x-test-region: us-east-1"
+    rxresp
+    expect resp.status == 200
+
+    txreq -url "/parts/object" -hdr "x-test-uri: /parts/object" -hdr "x-test-query: " \
+        -hdr "x-test-region: eu-west-1"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "ASIATEMPORARYEXAMPLE;IQoJb3JpZ2luX2VjEXAMPLE+/PARTS="
+} -run
+
+# a canonical request which does not fit in a buffer, see h1
+client c3 -connect ${h1_fe_sock} {
+    txreq -url "/long/++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"
+    rxresp
+    expect resp.status >= 500
+} -run
+
+# the scope, the signed headers and the hash of the canonical request are
+# traced, so that they may be compared with those of the storage, as well as
+# the reason of a failure, but neither the secret, the session token nor the
+# signature
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "sigv4 credential scope : profile=s3 \\([0-9]{8}/us-east-1/s3/aws4_request\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "sigv4 signed headers : profile=parts \\(host;x-amz-content-sha256;x-amz-date;x-amz-security-token\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "sigv4 canonical request hash : profile=s3 \\([0-9a-f]{64}\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "request not authenticated : profile=s3 \\(the canonical request does not fit in a buffer\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_sigv4_sign\\(\\): leaving on error : profile=s3"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect !~ "wJalrXUtnFEMI|c2Vzc2lvbi1zZWNyZXQ|IQoJb3JpZ2lu|Signature="
+}
+
+# the sources of the parts are reported
+haproxy h1 -cli {
+    send "show cloudauth parts"
+    expect ~ "parts\ts3\tsigv4\tfile:${tmpdir}/access-key-id env:AWS_SECRET_ACCESS_KEY env:AWS_SESSION_TOKEN\tvalid\t"
+}
+
+# a temporary key with its session token is set from the CLI, the token
+# being checked first
+haproxy h1 -cli {
+    send "set cloudauth credential s3 <<\nASIATEMPORARYEXAMPLE:secret:\n"
+    expect ~ "the token of the 'sigv4' signer must be '<access-key-id>:<secret>' or '<access-key-id>:<secret>:<session-token>'"
+
+    send "set cloudauth credential s3 <<\nASIATEMPORARYEXAMPLE:c2Vzc2lvbi1zZWNyZXQta2V5LWZvci10aGUtdGVzdHM:IQoJb3JpZ2luX2VjEXAMPLE+/TOKEN=\n"
+    expect ~ "Credential updated."
+}
+
+client c2 -connect ${h1_fe_sock} {
+    txreq -url "/bucket/object" -hdr "x-test-uri: /bucket/object" -hdr "x-test-query: " \
+        -hdr "x-test-region: us-east-1"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "ASIATEMPORARYEXAMPLE;IQoJb3JpZ2luX2VjEXAMPLE+/TOKEN="
+} -run

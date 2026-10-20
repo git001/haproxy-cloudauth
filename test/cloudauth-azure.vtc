@@ -1,0 +1,122 @@
+varnishtest "The cloudauth Azure provider signs the requests"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_AZURE)'"
+feature ignore_unknown_macro
+
+setenv CLOUDAUTH_AZ_TOKEN entra-token
+setenv CLOUDAUTH_AZ_SAS "?sv=2022-11-02&ss=b&sp=r&se=2030-01-01T00:00:00Z&sig=abc%2Bdef%3D"
+setenv CLOUDAUTH_AZ_KEY "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
+
+# bearer: the client credentials are removed and "x-ms-version" is set
+server s1 {
+    rxreq
+    expect req.url == "/c/blob?comp=list&prefix=a"
+    expect req.http.authorization == "Bearer entra-token"
+    expect req.http.x-ms-version == "2026-04-06"
+    txresp -body "bearer"
+} -start
+
+# SAS: appended to the query string, without the client one
+server s2 {
+    rxreq
+    expect req.url == "/c/blob?comp=list&sv=2022-11-02&ss=b&sp=r&se=2030-01-01T00:00:00Z&sig=abc%2Bdef%3D"
+    expect req.http.authorization == <undef>
+    expect req.http.x-ms-version == "2021-08-06"
+    txresp -body "sas"
+
+    rxreq
+    expect req.url == "/c/blob?sv=2022-11-02&ss=b&sp=r&se=2030-01-01T00:00:00Z&sig=abc%2Bdef%3D"
+    txresp -body "sas"
+} -start
+
+# Shared Key: the date is carried by "x-ms-date", the client "Date" is removed
+server s3 {
+    rxreq
+    expect req.url == "/devstoreaccount1/c?restype=container&comp=list"
+    expect req.http.authorization ~ "^SharedKey devstoreaccount1:[A-Za-z0-9+/]{43}=$"
+    expect req.http.x-ms-date ~ "^[A-Z][a-z]{2}, [0-9]{2} [A-Z][a-z]{2} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$"
+    expect req.http.x-ms-version == "2021-08-06"
+    expect req.http.date == <undef>
+    txresp -body "sharedkey"
+} -start
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+    traces
+        trace cloudauth sink buf0 level developer start now
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth entra
+        provider azure
+        signer bearer
+        token env:CLOUDAUTH_AZ_TOKEN
+    cloudauth sas
+        provider azure
+        signer sas
+        azure-version 2021-08-06
+        token env:CLOUDAUTH_AZ_SAS
+    cloudauth key
+        token env:CLOUDAUTH_AZ_KEY
+        signer sharedkey
+        provider azure
+        account devstoreaccount1
+        azure-version 2021-08-06
+    frontend fe
+        bind "fd@${fe}"
+        use_backend be_sas if { path_beg /sas/ }
+        use_backend be_key if { path_beg /key/ }
+        default_backend be_entra
+    backend be_entra
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s1_port} cloudauth entra
+    backend be_sas
+        http-request set-path %[path,regsub(^/sas,)]
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s2_port} cloudauth sas
+    backend be_key
+        http-request set-path %[path,regsub(^/key,/devstoreaccount1)]
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s3_port} cloudauth key
+} -start
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/c/blob?comp=list&sig=evil&prefix=a" -hdr "Authorization: Bearer client" -hdr "x-ms-version: 1999-01-01"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "bearer"
+} -run
+
+client c2 -connect ${h1_fe_sock} {
+    txreq -url "/sas/c/blob?comp=list&sv=2015-01-01&sig=client"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "sas"
+
+    txreq -url "/sas/c/blob?"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "sas"
+} -run
+
+client c3 -connect ${h1_fe_sock} {
+    txreq -url "/key/c?restype=container&comp=list" -hdr "Date: Mon, 01 Jan 2001 00:00:00 GMT" -hdr "x-ms-date: Mon, 01 Jan 2001 00:00:00 GMT"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "sharedkey"
+} -run
+
+# the signers are traced on entry and exit
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_azure_sign\\(\\): leaving : profile=sas"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_azure_sign_sharedkey\\(\\): leaving : profile=key"
+}

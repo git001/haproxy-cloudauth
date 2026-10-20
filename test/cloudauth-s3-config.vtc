@@ -1,0 +1,361 @@
+varnishtest "The cloudauth S3 configuration errors are detected"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_S3)'"
+feature ignore_unknown_macro
+
+# access keys: without secret, and a temporary one with its session token
+shell {
+    printf 'AKIAIOSFODNN7EXAMPLE\n' > "${tmpdir}/no-secret"
+    printf 'ASIATEMPORARYEXAMPLE:secret:session-token\n' > "${tmpdir}/temporary"
+    printf 'ASIATEMPORARYEXAMPLE\n' > "${tmpdir}/access-key-id"
+    printf 'secret:with-colon\n' > "${tmpdir}/colon"
+    printf 'eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.cG9kLXNpZw\n' > "${tmpdir}/pod-identity-token"
+    chmod 600 "${tmpdir}/no-secret" "${tmpdir}/temporary" "${tmpdir}/access-key-id" "${tmpdir}/colon" "${tmpdir}/pod-identity-token"
+}
+
+setenv S3_SECRET secret
+
+# only the sigv4 signer is supported
+haproxy h1 -conf-BAD {cloudauth section 'p1' : provider 's3' does not support the 'bearer' signer.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer bearer
+        token cli
+}
+
+# the region is mandatory
+haproxy h2 -conf-BAD {cloudauth section 'p1' : the 'sigv4' signer of provider 's3' requires 'region'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        token cli
+}
+
+# the access key is made of an access key identifier, a secret and an
+# optional session token
+haproxy h3 -conf-BAD {'token' : invalid token in 'file:${tmpdir}/no-secret' : the token of the 'sigv4' signer must be '<access-key-id>:<secret>' or '<access-key-id>:<secret>:<session-token>'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token "file:${tmpdir}/no-secret"
+}
+
+# the token sources of the provider are listed
+haproxy h4 -conf-BAD {'token' expects 'env:<variable>', 'file:<path>', 'cli' or a token source of provider 's3' ('container', 'pod-identity', 'workload-identity', 'instance-metadata'), secrets are not accepted in the configuration.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token imds
+}
+
+# a valid temporary access key
+haproxy h5 -conf-OK {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region eu-west-1
+        token "file:${tmpdir}/temporary"
+}
+
+# the parts of the access key are only accepted after "signer sigv4", up to
+# three of them, each one read from a variable or a file, without colon
+haproxy h6 -conf-BAD {'token' expects exactly one argument, except after 'signer sigv4'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        token "file:${tmpdir}/access-key-id" env:S3_SECRET
+        signer sigv4
+        region us-east-1
+}
+
+haproxy h7 -conf-BAD {'token' expects at most 3 arguments with the 'sigv4' signer (<access-key-id> <secret> [<session-token>]).} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token "file:${tmpdir}/access-key-id" env:S3_SECRET env:S3_SECRET env:S3_SECRET
+}
+
+haproxy h8 -conf-BAD {'token' expects 'env:<variable>' or 'file:<path>' for each part of the access key, secrets are not accepted in the configuration.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token "file:${tmpdir}/access-key-id" do-not-report-this
+}
+
+haproxy h9 -conf-BAD {'token' : the part read from 'file:${tmpdir}/colon' must not contain ':'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token "file:${tmpdir}/access-key-id" "file:${tmpdir}/colon"
+}
+
+# a valid access key read in two parts
+haproxy h10 -conf-OK {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token "file:${tmpdir}/access-key-id" env:S3_SECRET
+}
+
+# the credential endpoint of the containers must be known, and trusted when it
+# receives the authorization token in clear
+haproxy h11 -conf-BAD {cloudauth section 'p1' : the 'container' token source requires AWS_CONTAINER_CREDENTIALS_RELATIVE_URI or AWS_CONTAINER_CREDENTIALS_FULL_URI in the environment, or 'token-endpoint'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token container
+}
+
+haproxy h12 -conf-BAD {cloudauth section 'p1' : the credential endpoint 'http://192.0.2.1/v1/credentials' must use HTTPS, or HTTP to the loopback or to the container credential agents (169.254.170.2, 169.254.170.23, fd00:ec2::23).} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token pod-identity
+        token-endpoint http://192.0.2.1/v1/credentials
+}
+
+haproxy h13 -conf-BAD {cloudauth section 'p1' : the credential endpoint 'http://169.254.170.2.example.com/creds' must use HTTPS} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token container
+        token-endpoint http://169.254.170.2.example.com/creds
+}
+
+# the trusted endpoints, the default one of the EKS Pod Identity Agent, and the
+# scopes which are not supported
+haproxy h14 -conf-OK {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token container
+        token-endpoint https://credentials.example.com/v1/credentials
+    cloudauth p2
+        provider s3
+        signer sigv4
+        region us-east-1
+        token container
+        token-endpoint "http://[fd00:ec2::23]/v1/credentials"
+    cloudauth p3
+        provider s3
+        signer sigv4
+        region us-east-1
+        token pod-identity
+        input authorization-token "file:${tmpdir}/pod-identity-token"
+    cloudauth p4
+        provider s3
+        signer sigv4
+        region us-east-1
+        token container
+        token-endpoint http://localhost:51679/v2/credentials
+}
+
+haproxy h15 -conf-BAD {cloudauth section 'p1' : the token source 'container' does not support 'token-scopes'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token container
+        token-endpoint http://127.0.0.1/v2/credentials
+        token-scopes read
+}
+
+# the full URI of the environment is checked like "token-endpoint"
+setenv AWS_CONTAINER_CREDENTIALS_FULL_URI "http://192.0.2.1/get-credentials"
+
+haproxy h16 -conf-BAD {cloudauth section 'p1' : the credential endpoint 'http://192.0.2.1/get-credentials' must use HTTPS} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token container
+}
+
+# the role of "workload-identity" is mandatory, and only used by it
+haproxy h17 -conf-BAD {cloudauth section 'p1' : the 'workload-identity' token source requires 's3-role-arn'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token workload-identity
+}
+
+haproxy h18 -conf-BAD {cloudauth section 'p1' : 's3-role-arn' and 's3-role-session-name' are only used by the 'workload-identity' token source} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token cli
+        s3-role-session-name haproxy
+}
+
+haproxy h19 -conf-BAD {'s3-role-arn' requires 'provider s3' first.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        token cli
+        s3-role-arn arn:aws:iam::123456789012:role/web
+}
+
+# the role ARN and the role session name are checked, the ARN being possibly
+# read from the environment
+haproxy h20 -conf-BAD {'s3-role-arn' : invalid role ARN 'role/web', expects 'arn:' followed by visible characters} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token workload-identity
+        s3-role-arn role/web
+}
+
+haproxy h21 -conf-BAD {'s3-role-session-name' : invalid role session name 'my session', expects 2 to 64 letters, digits or '_+=,.@-'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token workload-identity
+        s3-role-arn arn:aws:iam::123456789012:role/web
+        s3-role-session-name "my session"
+}
+
+haproxy h22 -conf-BAD {'s3-role-arn' : environment variable 'AWS_ROLE_ARN' is not set or empty.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token workload-identity
+        s3-role-arn env:AWS_ROLE_ARN
+}
+
+# the endpoint of the Security Token Service receives the federated token, so
+# it is checked like the credential endpoints of the containers
+haproxy h23 -conf-BAD {cloudauth section 'p1' : the credential endpoint 'http://sts.example.com/' must use HTTPS} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token workload-identity
+        s3-role-arn arn:aws:iam::123456789012:role/web
+        token-endpoint http://sts.example.com/
+}
+
+setenv AWS_ROLE_ARN arn:aws:iam::123456789012:role/web
+
+haproxy h24 -conf-OK {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region eu-west-1
+        token workload-identity
+        s3-role-arn env:AWS_ROLE_ARN
+    cloudauth p2
+        provider s3
+        signer sigv4
+        region us-east-1
+        token workload-identity
+        s3-role-arn arn:aws:iam::123456789012:role/web
+        s3-role-session-name app@example.com
+        token-endpoint https://sts.amazonaws.com/
+}
+
+# the endpoint of the Instance Metadata Service receives the session token,
+# so HTTP is only accepted to the loopback and to the service itself
+haproxy h25 -conf-BAD {cloudauth section 'p1' : the credential endpoint 'http://192.0.2.1' must use HTTPS, or HTTP to the loopback or to the instance metadata service (169.254.169.254, fd00:ec2::254)} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token instance-metadata
+        token-endpoint http://192.0.2.1
+}
+
+haproxy h26 -conf-BAD {cloudauth section 'p1' : the credential endpoint 'http://169.254.170.2/' must use HTTPS, or HTTP to the loopback or to the instance metadata service} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token instance-metadata
+        token-endpoint http://169.254.170.2/
+}
+
+haproxy h27 -conf-OK {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider s3
+        signer sigv4
+        region us-east-1
+        token instance-metadata
+    cloudauth p2
+        provider s3
+        signer sigv4
+        region us-east-1
+        token instance-metadata
+        token-endpoint "http://[fd00:ec2::254]"
+    cloudauth p3
+        provider s3
+        signer sigv4
+        region us-east-1
+        token instance-metadata
+        token-endpoint http://169.254.169.254/
+}

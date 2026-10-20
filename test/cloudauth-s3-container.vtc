@@ -1,0 +1,209 @@
+varnishtest "The cloudauth S3 provider fetches the access keys of the containers"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_S3)'"
+feature ignore_unknown_macro
+
+# the credentials of the containers, the first ones expiring in 4 seconds,
+# and the token of the service account of the pod (JWT) expiring on 2100-01-01
+shell {
+    expiration=$(date -u -d "@$(( $(date +%s) + 4 ))" +%Y-%m-%dT%H:%M:%SZ)
+    printf '{"AccessKeyId":"ASIACONTAINEREXAMPLE","Expiration":"%s","RoleArn":"arn:aws:iam::123456789012:role/task","SecretAccessKey":"container-secret","Token":"container/session+token="}\n' "$expiration" > "${tmpdir}/container.json"
+    printf '{"AccessKeyId":"ASIAREFRESHEDEXAMPLE","Expiration":"2100-01-01T00:00:00Z","SecretAccessKey":"refreshed-secret","Token":"refreshed-session-token"}\n' > "${tmpdir}/refreshed.json"
+    printf '{"AccessKeyId":"ASIAPODIDENTITYEXAMPLE","AccountId":"123456789012","Expiration":"2100-01-01T00:00:00Z","SecretAccessKey":"pod-secret","Token":"pod-session-token"}\n' > "${tmpdir}/pod.json"
+    printf '{"AccessKeyId":"ASIAINVALIDEXAMPLE","SecretAccessKey":"secret:with-colon","Token":"do-not-report-this"}\n' > "${tmpdir}/invalid.json"
+    printf '%s\n' "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.cG9kLXNpZw" > "${tmpdir}/pod-identity-token"
+    chmod 600 "${tmpdir}/pod-identity-token"
+}
+
+# the credential endpoint of the task, with the authorization token of the
+# environment, which is requested again once half of the lifetime of the
+# first credentials elapsed
+server s1 {
+    rxreq
+    expect req.method == "GET"
+    expect req.url == "/v2/credentials/task?id=1"
+    expect req.http.authorization == "Basic dGFzaw=="
+    # without payload, not even an empty chunked one
+    expect req.http.transfer-encoding == <undef>
+    expect req.http.content-length == <undef>
+    txresp -hdr "Content-Type: application/json" -bodyfrom "${tmpdir}/container.json"
+
+    accept
+    rxreq
+    expect req.url == "/v2/credentials/task?id=1"
+    expect req.http.authorization == "Basic dGFzaw=="
+    txresp -hdr "Content-Type: application/json" -bodyfrom "${tmpdir}/refreshed.json"
+} -start
+
+# the EKS Pod Identity Agent, which receives the token of the service account
+server s2 {
+    rxreq
+    expect req.url == "/v1/credentials"
+    expect req.http.authorization == "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.cG9kLXNpZw"
+    txresp -hdr "Content-Type: application/json" -bodyfrom "${tmpdir}/pod.json"
+} -start
+
+# a failing endpoint, and one answering with invalid credentials
+server s3 -repeat 10 {
+    rxreq
+    txresp -status 500 -hdr "Content-Type: text/plain" -body "do not report this"
+} -start
+
+server s4 -repeat 10 {
+    rxreq
+    txresp -hdr "Content-Type: application/json" -bodyfrom "${tmpdir}/invalid.json"
+} -start
+
+# the storage, which receives the access keys and their session tokens, the
+# refreshed ones the second time
+server s5 {
+    rxreq
+    expect req.http.authorization ~ "^AWS4-HMAC-SHA256 Credential=ASIACONTAINEREXAMPLE/[0-9]{8}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=[0-9a-f]{64}$"
+    expect req.http.x-amz-security-token == "container/session+token="
+    txresp -hdr "Connection: close" -body "container"
+
+    accept
+    rxreq
+    expect req.http.authorization ~ "^AWS4-HMAC-SHA256 Credential=ASIAREFRESHEDEXAMPLE/"
+    expect req.http.x-amz-security-token == "refreshed-session-token"
+    txresp -body "refreshed"
+} -start
+
+server s6 {
+    rxreq
+    expect req.http.authorization ~ "^AWS4-HMAC-SHA256 Credential=ASIAPODIDENTITYEXAMPLE/"
+    expect req.http.x-amz-security-token == "pod-session-token"
+    txresp -body "pod"
+} -start
+
+# the credential endpoint of the task, as set by ECS for a full URI
+setenv AWS_CONTAINER_CREDENTIALS_FULL_URI "http://${s1_addr}:${s1_port}/v2/credentials/task?id=1"
+setenv AWS_CONTAINER_AUTHORIZATION_TOKEN "Basic dGFzaw=="
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+    traces
+        trace cloudauth sink buf0 level developer start now
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth container
+        provider s3
+        signer sigv4
+        region us-east-1
+        token container
+    cloudauth pod
+        provider s3
+        signer sigv4
+        region eu-west-1
+        token pod-identity
+        input authorization-token "file:${tmpdir}/pod-identity-token"
+        token-endpoint "http://${s2_addr}:${s2_port}/v1/credentials"
+    cloudauth failing
+        provider s3
+        signer sigv4
+        region us-east-1
+        token container
+        token-endpoint "http://${s3_addr}:${s3_port}/v2/credentials/failing"
+        fetch-max-backoff 10s
+    cloudauth invalid
+        provider s3
+        signer sigv4
+        region us-east-1
+        token container
+        token-endpoint "http://${s4_addr}:${s4_port}/v2/credentials/invalid"
+        fetch-max-backoff 10s
+    frontend fe
+        bind "fd@${fe}"
+        use_backend be_pod if { path_beg /pod/ }
+        default_backend be_container
+    backend be_container
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s5_port} cloudauth container
+    backend be_pod
+        filter-config cloudauth enabled
+        server srv ipv4@localhost:${s6_port} cloudauth pod
+} -start
+
+# let the access keys be fetched
+delay 1
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/bucket/object"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "container"
+
+    txreq -url "/pod/object"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "pod"
+} -run
+
+haproxy h1 -cli {
+    send "show cloudauth container"
+    expect ~ "container\ts3\tsigv4\tfetch:container\tvalid\t[0-9-]+T[0-9:]+Z\t[1-4]s\t"
+
+    send "show cloudauth pod"
+    expect ~ "pod\ts3\tsigv4\tfetch:pod-identity\tvalid\t2100-01-01T00:00:00Z\t.*\t-\tauthorization-token:valid:2100-01-01T00:00:00Z\n"
+
+    send "show cloudauth failing"
+    expect ~ "failing\ts3\tsigv4\tfetch:container\tmissing\t.*\tthe credential endpoint answered with status 500\t-\n"
+
+    send "show cloudauth invalid"
+    expect ~ "invalid\ts3\tsigv4\tfetch:container\tmissing\t.*\tmissing or invalid \"SecretAccessKey\" in the credentials\t-\n"
+}
+
+# the first credentials expire after 4 seconds, so they were requested again
+# after 2 seconds
+delay 3
+
+client c2 -connect ${h1_fe_sock} {
+    txreq -url "/bucket/object"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "refreshed"
+} -run
+
+haproxy h1 -cli {
+    send "show cloudauth container"
+    expect ~ "container\ts3\tsigv4\tfetch:container\tvalid\t2100-01-01T00:00:00Z\t"
+}
+
+# the endpoints are traced without their query string, and neither the
+# authorization tokens nor the credentials are traced
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "container credential endpoint : profile=container \\(http://${s1_addr}:${s1_port}/v2/credentials/task\\)"
+}
+
+# where the authorization token comes from and the size of the responses are
+# traced, not the token nor the credentials
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "authorization token sent from : profile=container \\(AWS_CONTAINER_AUTHORIZATION_TOKEN\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "authorization token sent from : profile=pod \\(input 'authorization-token'\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "payload of the response : profile=invalid \\([0-9]+ bytes\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "cloudauth_s3_creds_response\\(\\): leaving on error : profile=invalid"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect !~ "id=1|dGFzaw|cG9kLXNpZw|-secret|session|do-not-report|do not report"
+}

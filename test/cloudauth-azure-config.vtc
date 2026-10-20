@@ -1,0 +1,490 @@
+varnishtest "The cloudauth Azure configuration errors are detected"
+
+feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_AZURE)'"
+feature ignore_unknown_macro
+
+setenv CLOUDAUTH_AZ_BADKEY "not!base64"
+setenv CLOUDAUTH_AZ_BADSAS "sv=2022-11-02&sp=r"
+setenv CLOUDAUTH_AZ_SECRET "client-secret"
+
+# a certificate with the private key of another one, and a private key alone
+shell {
+    sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' "${testdir}/../ssl/certs/common.pem" > "${tmpdir}/mismatch.pem"
+    sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/../ssl/certs/cert1-example.com.pem.rsa" >> "${tmpdir}/mismatch.pem"
+    sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/../ssl/certs/common.pem" > "${tmpdir}/key-only.pem"
+    cp "${testdir}/../ssl/certs/common.pem" "${tmpdir}/app.pem"
+    cp "${testdir}/../ssl/certs/ecdsa.pem" "${tmpdir}/ecdsa.pem"
+    cp "${testdir}/cloudauth-azure-cert-enc.pem" "${tmpdir}/app-enc.pem"
+    printf 'wrong-password\n' > "${tmpdir}/wrong-password"
+    chmod 600 "${tmpdir}/mismatch.pem" "${tmpdir}/key-only.pem" "${tmpdir}/app.pem" "${tmpdir}/ecdsa.pem" \
+          "${tmpdir}/app-enc.pem" "${tmpdir}/wrong-password"
+}
+
+# Shared Key requires the account name
+haproxy h1 -conf-BAD {the 'sharedkey' signer of provider 'azure' requires 'account'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer sharedkey
+        token cli
+}
+
+# the account name is only used by Shared Key
+haproxy h2 -conf-BAD {'account' is only used by the 'sharedkey' signer} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        account devstoreaccount1
+        token cli
+}
+
+# the account name must be valid
+haproxy h3 -conf-BAD {invalid account name 'Bad-Name', expects 3 to 24 lower case letters and digits} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer sharedkey
+        account Bad-Name
+        token cli
+}
+
+# the version is a date
+haproxy h4 -conf-BAD {invalid version 'latest', expects a date like} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        azure-version latest
+        token cli
+}
+
+# the Azure keywords require the Azure provider first
+haproxy h5 -conf-BAD {'azure-version' requires 'provider azure' first} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        signer bearer
+        azure-version 2021-08-06
+        provider azure
+        token cli
+}
+
+# the account key must be base64 encoded, even when loaded before the
+# provider and the signer
+haproxy h6 -conf-BAD {invalid token : the account key must be base64 encoded} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        token env:CLOUDAUTH_AZ_BADKEY
+        signer sharedkey
+        provider azure
+        account devstoreaccount1
+}
+
+# a shared access signature must have a "sig" parameter
+haproxy h7 -conf-BAD {the shared access signature has no 'sig' parameter} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer sas
+        token env:CLOUDAUTH_AZ_BADSAS
+}
+
+# the supported providers are listed
+haproxy h8 -conf-BAD {unknown provider 'aws', the supported ones are : 'azure'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider aws
+        signer bearer
+        token cli
+}
+
+# the token sources of the provider are listed, the argument is never echoed
+haproxy h9 -conf-BAD {'token' expects 'env:<variable>', 'file:<path>', 'cli' or a token source of provider 'azure' ('managed-identity', 'client-secret', 'workload-identity', 'client-certificate'), secrets are not accepted in the configuration} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token my-secret-token
+}
+
+# the managed identities only provide bearer tokens
+haproxy h10 -conf-BAD {the token source 'managed-identity' cannot be used with the 'sas' signer} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer sas
+        token managed-identity
+}
+
+# the client ID is a GUID
+haproxy h11 -conf-BAD {invalid client ID 'my-identity', expects a GUID} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token managed-identity
+        azure-client-id my-identity
+}
+
+# the IMDS endpoint is an HTTP URL
+haproxy h12 -conf-BAD {invalid URL '169.254.169.254', expects 'http://' or 'https://'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token managed-identity
+        token-endpoint 169.254.169.254
+}
+
+# the fetching delays are limited
+haproxy h13 -conf-BAD {'fetch-refresh' : delay '2d' is too large} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token managed-identity
+        fetch-refresh 2d
+}
+
+haproxy h14 -conf-BAD {'fetch-timeout' : delay '0' is too small, expects at least 1ms} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token managed-identity
+        fetch-timeout 0
+}
+
+# the client secret source requires the tenant, the client ID and the secret
+haproxy h15 -conf-BAD {the 'client-secret' token source requires 'azure-tenant-id', 'azure-client-id' and 'azure-client-secret'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-secret
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-secret env:CLOUDAUTH_AZ_SECRET
+}
+
+# the client secret is never accepted in the configuration, nor echoed
+haproxy h16 -conf-BAD {'azure-client-secret' : expects 'env:<variable>' or 'file:<path>', secrets are not accepted in the configuration.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-secret
+        azure-client-secret my-literal-secret
+}
+
+# the authority host only accepts HTTPS, the client secret is sent to it
+haproxy h17 -conf-BAD {invalid URL 'http://login.microsoftonline.com', expects 'https://<host>[:<port>]'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-secret
+        azure-authority-host http://login.microsoftonline.com
+}
+
+haproxy h18 -conf-BAD {invalid URL 'https://login.microsoftonline.com/tenant', expects 'https://<host>[:<port>]'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-secret
+        azure-authority-host https://login.microsoftonline.com/tenant
+}
+
+# the tenant ID is a GUID or a domain name
+haproxy h19 -conf-BAD {invalid tenant ID 'my/tenant', expects a GUID or a domain name} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-secret
+        azure-tenant-id my/tenant
+}
+
+# the settings of a token source are rejected with another one
+haproxy h20 -conf-BAD {'azure-tenant-id' and 'azure-authority-host' are only used by the 'client-secret', 'workload-identity' and 'client-certificate' token sources} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token managed-identity
+        azure-tenant-id contoso.onmicrosoft.com
+}
+
+haproxy h21 -conf-BAD {the token source 'client-secret' does not support 'token-endpoint'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-secret
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-secret env:CLOUDAUTH_AZ_SECRET
+        token-endpoint http://127.0.0.1/imds
+}
+
+haproxy h22 -conf-BAD {'azure-client-id' is only used by the 'managed-identity', 'client-secret', 'workload-identity' and 'client-certificate' token sources} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token cli
+        azure-client-id 11111111-2222-3333-4444-555555555555
+}
+
+# the applications only provide bearer tokens
+haproxy h23 -conf-BAD {the token source 'client-secret' cannot be used with the 'sas' signer} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer sas
+        token client-secret
+}
+
+# the workload identities require the tenant and the client ID
+haproxy h24 -conf-BAD {the 'workload-identity' token source requires 'azure-tenant-id' and 'azure-client-id'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token workload-identity
+        azure-client-id 11111111-2222-3333-4444-555555555555
+}
+
+# the inputs are those of the token source, selected first
+haproxy h25 -conf-BAD {'input' requires a token source using inputs first ('token <source>')} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        input federated-token env:CLOUDAUTH_AZ_SECRET
+        token workload-identity
+}
+
+haproxy h26 -conf-BAD {'input' : unknown input 'token' of the token source 'workload-identity', expects 'federated-token'.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token workload-identity
+        input token env:CLOUDAUTH_AZ_SECRET
+}
+
+# the inputs are never accepted in the configuration, nor echoed
+haproxy h27 -conf-BAD {'input' : expects 'env:<variable>' or 'file:<path>', secrets are not accepted in the configuration.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token workload-identity
+        input federated-token my-literal-token
+}
+
+# the client secret is not used by the workload identities
+haproxy h28 -conf-BAD {'azure-client-secret' is only used by the 'client-secret' token source} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token workload-identity
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-secret env:CLOUDAUTH_AZ_SECRET
+}
+
+# the certificate of the application, with its RSA private key, is mandatory
+haproxy h29 -conf-BAD {the 'client-certificate' token source requires 'azure-tenant-id', 'azure-client-id' and 'azure-client-certificate'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-certificate
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+}
+
+haproxy h30 -conf-BAD {the private key must be an RSA one} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-certificate
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-certificate "file:${tmpdir}/ecdsa.pem"
+}
+
+haproxy h31 -conf-BAD {the private key does not match the certificate} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-certificate
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-certificate "file:${tmpdir}/mismatch.pem"
+}
+
+haproxy h32 -conf-BAD {no PEM certificate found} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-certificate
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-certificate "file:${tmpdir}/key-only.pem"
+}
+
+# the certificate is never accepted in the configuration
+haproxy h33 -conf-BAD {'azure-client-certificate' : expects 'env:<variable>' or 'file:<path>', secrets are not accepted in the configuration.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-certificate
+        azure-client-certificate my-literal-certificate
+}
+
+haproxy h34 -conf-BAD {'azure-client-certificate' and 'azure-client-certificate-password' are only used by the 'client-certificate' token source} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-secret
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-secret env:CLOUDAUTH_AZ_SECRET
+        azure-client-certificate "file:${tmpdir}/app.pem"
+}
+
+# the authority host only accepts the characters of a host and a port
+haproxy h35 -conf-BAD {invalid URL 'https://login"microsoftonline.com', expects 'https://<host>[:<port>]'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-secret
+        azure-authority-host 'https://login"microsoftonline.com'
+}
+
+# an encrypted private key requires its password
+haproxy h36 -conf-BAD {no PEM private key found, or it is encrypted and 'azure-client-certificate-password' is not set} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-certificate
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-certificate "file:${tmpdir}/app-enc.pem"
+}
+
+haproxy h37 -conf-BAD {no PEM private key found, or it cannot be decrypted with 'azure-client-certificate-password'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-certificate
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-certificate-password "file:${tmpdir}/wrong-password"
+        azure-client-certificate "file:${tmpdir}/app-enc.pem"
+}
+
+# the password is never accepted in the configuration
+haproxy h38 -conf-BAD {'azure-client-certificate-password' expects 'env:<variable>', 'file:<path>' or 'no-password', secrets are not accepted in the configuration.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-certificate
+        azure-client-certificate-password test-password
+}
+
+haproxy h39 -conf-BAD {'azure-client-certificate' and 'azure-client-certificate-password' are only used by the 'client-certificate' token source} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token managed-identity
+        azure-client-certificate-password "file:${tmpdir}/wrong-password"
+}
+
+# "no-password" declares that the private key is not encrypted
+haproxy h40 -conf-BAD {no PEM private key found, or it is encrypted while 'azure-client-certificate-password' is 'no-password'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token client-certificate
+        azure-tenant-id contoso.onmicrosoft.com
+        azure-client-id 11111111-2222-3333-4444-555555555555
+        azure-client-certificate "file:${tmpdir}/app-enc.pem"
+        azure-client-certificate-password no-password
+}
+
+# the managed identities do not support scopes
+haproxy h41 -conf-BAD {the token source 'managed-identity' does not support 'token-scopes'} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer bearer
+        token managed-identity
+        token-scopes https://storage.azure.com/.default
+}
+
+# the HMAC keys are not supported
+haproxy h42 -conf-BAD {cloudauth section 'p1' : provider 'azure' does not support the 'sigv4' signer.} {
+    global
+        expose-experimental-directives
+    cloudauth p1
+        provider azure
+        signer sigv4
+        token cli
+}

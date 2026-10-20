@@ -64,6 +64,15 @@ enum cloudauth_cred_state {
 	CLOUDAUTH_CRED_EXPIRED,     /* the credential expired */
 };
 
+/* A snapshot of the state of a profile, which does not reveal its credential,
+ * for the sample fetches and the metrics.
+ */
+struct cloudauth_status {
+	enum cloudauth_cred_state state; /* state of the credential */
+	unsigned int expire;            /* expiration date (wall clock, in seconds), 0 = never */
+	int fetch_failed;               /* the last fetch of the credential failed */
+};
+
 /* The credential of a profile. It is a secret: it must never be logged nor
  * dumped, and it is wiped when it is released.
  */

@@ -29,11 +29,12 @@ endif
 endif
 
 OPTIONS_OBJS += \
-	$(CLOUDAUTH_DIR)/src/flt_cloudauth.o    \
-	$(CLOUDAUTH_DIR)/src/cloudauth.o        \
-	$(CLOUDAUTH_DIR)/src/cloudauth_common.o \
-	$(CLOUDAUTH_DIR)/src/cloudauth_fetch.o  \
-	$(CLOUDAUTH_DIR)/src/cloudauth_sigv4.o  \
+	$(CLOUDAUTH_DIR)/src/flt_cloudauth.o     \
+	$(CLOUDAUTH_DIR)/src/cloudauth.o         \
+	$(CLOUDAUTH_DIR)/src/cloudauth_common.o  \
+	$(CLOUDAUTH_DIR)/src/cloudauth_fetch.o   \
+	$(CLOUDAUTH_DIR)/src/cloudauth_metrics.o \
+	$(CLOUDAUTH_DIR)/src/cloudauth_sigv4.o   \
 	$(CLOUDAUTH_DIR)/src/cloudauth_trace.o
 
 ifneq ($(CLOUDAUTH_AZURE:0=),)

@@ -1,0 +1,74 @@
+varnishtest "The cloudauth sample fetches report the state of the profiles"
+
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth provider: azure '"
+feature ignore_unknown_macro
+
+# a static token, and a JWT expiring in 2100
+setenv CLOUDAUTH_STATIC static-token
+setenv CLOUDAUTH_JWT eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.c2ln
+
+# the IMDS endpoint of the failing profile
+server s1 -repeat 10 {
+    rxreq
+    txresp -status 500 -body "unavailable"
+} -start
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth static
+        signer bearer
+        token env:CLOUDAUTH_STATIC
+    cloudauth jwt
+        signer bearer
+        token env:CLOUDAUTH_JWT
+    cloudauth missing
+        signer bearer
+        token cli
+    cloudauth failing
+        provider azure
+        signer bearer
+        token managed-identity
+        token-endpoint "http://${s1_addr}:${s1_port}/imds"
+    frontend fe
+        bind "fd@${fe}"
+        # no backend with a filter yet: only the profiles given by name
+        http-request return status 200 content-type text/plain lf-string "[%[cloudauth.profile]];%[cloudauth.cred_state(jwt)];%[cloudauth.cred_state(missing)];[%[cloudauth.cred_state(unknown)]]" if { path /fe }
+        use_backend be_jwt if { path /jwt }
+        default_backend be_static
+    backend be_static
+        http-request return status 200 content-type text/plain lf-string "%[cloudauth.profile];%[cloudauth.cred_state];[%[cloudauth.cred_ttl]];%[cloudauth.fetch_failed];%[cloudauth.fetch_failed(failing)];%[cloudauth.cred_state(failing)]"
+        filter-config cloudauth enabled profile static host storage.example.com
+        server srv 127.0.0.1:1
+    backend be_jwt
+        http-request return status 200 content-type text/plain lf-string "%[cloudauth.profile];%[cloudauth.cred_state];%[cloudauth.cred_ttl]"
+        filter-config cloudauth enabled profile jwt host storage.example.com
+        server srv 127.0.0.1:1
+} -start
+
+# let the fetch of the failing profile fail
+delay 1
+
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/fe"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "[];valid;missing;[]"
+
+    # a static token never expires, so it has no remaining validity
+    txreq -url "/"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "static;valid;[];0;1;missing"
+
+    txreq -url "/jwt"
+    rxresp
+    expect resp.status == 200
+    expect resp.body ~ "^jwt;valid;[0-9]{10}$"
+} -run

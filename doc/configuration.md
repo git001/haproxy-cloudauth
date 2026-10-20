@@ -194,7 +194,8 @@ backend storage
 The backends count the authenticated requests (`cloudauth_req_signed`) and the
 requests which could not be authenticated (`cloudauth_req_failed`). These
 counters are reported by the `show stat` CLI command and by the Prometheus
-exporter.
+exporter with its `extra-counters` parameter. The state of the profiles is
+reported by sample fetches (see section 4).
 
 The request is authenticated before it is queued, when the servers are full.
 The signatures of the storages are valid for a few minutes (15 minutes for
@@ -1119,3 +1120,62 @@ characters except the double quote and the backslash, and the scopes are at
 most 1024 characters long, including the spaces between them. The token sources
 which do not support them reject it, see each token source. It requires
 `token <source>`.
+
+## 4. Sample fetches and metrics
+
+The sample fetches below report the state of the credential profiles, for the
+logs, the HTTP rules, or the metrics of the OpenTelemetry filter, which reads
+its values from sample expressions. They never reveal a credential. The ones
+taking an optional `<profile>` report the profile of this name, or by default
+the profile of the cloudauth filter of the backend of the stream. They return
+no sample if there is no such profile. Note that the backend is the frontend
+itself until a backend is chosen.
+
+Example, counting the requests of a backend which could not be authenticated
+with the OpenTelemetry filter, the attributes giving the profile and the reason,
+once the response is known since the requests are authenticated last:
+
+```
+otel-scope cloudauth_failures
+    instrument cnt_int cloudauth_failed value int(1)
+    instrument update cloudauth_failed attr profile cloudauth.profile attr reason var(txn.cloudauth.error) if { var(txn.cloudauth.error) -m found }
+    otel-event on-http-response
+```
+
+### cloudauth.profile
+
+```
+cloudauth.profile : string
+```
+
+Returns the name of the profile of the cloudauth filter of the backend, whether
+the filter is enabled or not.
+
+### cloudauth.cred_state
+
+```
+cloudauth.cred_state([<profile>]) : string
+```
+
+Returns the state of the credential of the profile: `missing` if no credential
+was loaded yet, `valid`, or `expired`, as reported by `show cloudauth`.
+
+### cloudauth.cred_ttl
+
+```
+cloudauth.cred_ttl([<profile>]) : integer
+```
+
+Returns the remaining validity of the credential of the profile, in seconds, or
+0 once it expired. It returns no sample if the credential is missing or does not
+expire, such as a static token which is not a JWT.
+
+### cloudauth.fetch_failed
+
+```
+cloudauth.fetch_failed([<profile>]) : boolean
+```
+
+Returns true if the last fetch of the credential of the profile failed, the
+reason being reported by `show cloudauth`. It is always false for the
+credentials which are not fetched by HAProxy.

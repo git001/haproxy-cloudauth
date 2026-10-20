@@ -40,6 +40,8 @@ int cloudauth_set_token(struct cloudauth_profile *prof, struct ist token, unsign
 int cloudauth_find_input(const struct cloudauth_profile *prof, const char *name);
 int cloudauth_set_input(struct cloudauth_profile *prof, int idx, const struct ist value, char **err);
 enum cloudauth_cred_state cloudauth_cred_state(struct cloudauth_profile *prof);
+void cloudauth_get_status(struct cloudauth_profile *prof, struct cloudauth_status *st);
+struct cloudauth_profile *cloudauth_flt_profile(struct proxy *px);
 
 void cloudauth_count_request(struct proxy *px, int failed);
 

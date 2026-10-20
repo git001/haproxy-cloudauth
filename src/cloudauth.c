@@ -340,6 +340,16 @@ enum cloudauth_cred_state cloudauth_cred_state(struct cloudauth_profile *prof)
 	return state;
 }
 
+/* Fills <st> with the state of profile <prof>, taken under its lock */
+void cloudauth_get_status(struct cloudauth_profile *prof, struct cloudauth_status *st)
+{
+	HA_RWLOCK_RDLOCK(OTHER_LOCK, &prof->lock);
+	st->state = __cloudauth_cred_state(prof);
+	st->expire = isttest(prof->cred.token) ? prof->cred.expire : 0;
+	st->fetch_failed = prof->fetch.error[0] != 0;
+	HA_RWLOCK_RDUNLOCK(OTHER_LOCK, &prof->lock);
+}
+
 /* Returns the expiration date ("exp" claim) of <token> if it is a JWT, or 0 if
  * it is not a JWT or has no valid "exp" claim. <token> must not be empty. The
  * signature is not checked: the token is only used to authenticate HAProxy,

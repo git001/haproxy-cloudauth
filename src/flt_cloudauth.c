@@ -122,6 +122,20 @@ static int cloudauth_flt_check(struct proxy *px, struct flt_conf *fconf)
 	return 0;
 }
 
+/* Returns the profile of the cloudauth filter of proxy <px>, or NULL if it has
+ * none. The profile is only resolved once the configuration is checked.
+ */
+struct cloudauth_profile *cloudauth_flt_profile(struct proxy *px)
+{
+	struct filter_instance *inst = flt_find_instance(px, &flt_cloudauth_cls, NULL);
+	struct cloudauth_flt_conf *conf;
+
+	if (!inst)
+		return NULL;
+	conf = inst->fconf->conf;
+	return conf->profile;
+}
+
 /* Releases the filter configuration <fconf> of proxy <px> */
 static void cloudauth_flt_deinit(struct proxy *px, struct flt_conf *fconf)
 {

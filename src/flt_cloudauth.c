@@ -95,6 +95,7 @@ static void cloudauth_set_error(struct stream *s, const struct cloudauth_profile
 static int cloudauth_flt_check(struct proxy *px, struct flt_conf *fconf)
 {
 	struct cloudauth_flt_conf *conf = fconf->conf;
+	struct filter_instance *inst;
 
 	if (px->mode != PR_MODE_HTTP) {
 		ha_alert("config : proxy '%s' : the cloudauth filter requires an HTTP proxy.\n", px->id);
@@ -110,6 +111,14 @@ static int cloudauth_flt_check(struct proxy *px, struct flt_conf *fconf)
 		ha_alert("config : proxy '%s' : unknown cloudauth profile '%s'.\n", px->id, conf->profile_name);
 		return 1;
 	}
+
+	/* a disabled instance is valid, but the requests then leave as they
+	 * were received, which is probably not expected.
+	 */
+	inst = flt_find_instance(px, &flt_cloudauth_cls, NULL);
+	if (inst && !inst->enabled)
+		ha_warning("config : proxy '%s' : the cloudauth filter is not enabled, "
+		           "the requests are not authenticated (see 'filter-enable').\n", px->id);
 	return 0;
 }
 

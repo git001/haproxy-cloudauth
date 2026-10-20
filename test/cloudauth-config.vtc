@@ -53,6 +53,13 @@ haproxy h5 -conf-BAD {unknown cloudauth profile 'nope'} {
         server s1 localhost:80
 }
 
+# a disabled filter instance is reported, since the requests are then not
+# authenticated
+shell {
+    printf 'global\n    expose-experimental-directives\ndefaults\n    mode http\nbackend be\n    filter-config cloudauth profile p1 host localhost\n    server s1 localhost:80\ncloudauth p1\n    signer bearer\n    token cli\n' > "${tmpdir}/disabled.cfg"
+    "${HAPROXY_PROGRAM}" -c -f "${tmpdir}/disabled.cfg" 2>&1 | grep -qF "proxy 'be' : the cloudauth filter is not enabled, the requests are not authenticated"
+}
+
 # the client Host header is never used, so the host is mandatory, as well as
 # the profile
 haproxy h7 -conf-BAD {'filter-config cloudauth' : missing 'host <host>'} {

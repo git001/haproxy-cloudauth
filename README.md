@@ -9,5 +9,5 @@ each cloud, refreshed in the background and never logged.
 The filter is built as an addon outside the HAProxy source tree, without any
 change to HAProxy itself.
 
-**Status: work in progress.** The code was imported from the HAProxy branch
-`feature/cloud-storage` (commit 28d1fedd2) and is being turned into an addon.
+**Status: work in progress.** The filter was first written inside the HAProxy
+source tree and is being turned into an addon; it does not build yet.

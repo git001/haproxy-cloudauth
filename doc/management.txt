@@ -1,4 +1,4 @@
-# ---- from doc/management.txt, set anon [on|off] [<key>]
+# ---- part of HAProxy's doc/management.txt, somewhere below the heading "set anon [on|off] [<key>]"
 set cloudauth credential <profile> [expires-in <delay> | expires-at <date>]
   Replace the credential of the cloudauth profile <profile> by the one passed
   as payload (see "Payload" above). This command is only available when
@@ -59,7 +59,7 @@ set cloudauth input <profile> <name>
     Input updated.
 
 
-# ---- from doc/management.txt, show cache
+# ---- part of HAProxy's doc/management.txt, somewhere below the heading "show cache"
 show cloudauth [<profile>]
   Dump the state of the cloudauth credential profiles, or of the profile
   <profile> only. This command is only available when HAProxy was built with
@@ -91,7 +91,7 @@ show cloudauth [<profile>]
     azure-wi	azure	bearer	fetch:workload-identity	valid	2026-10-17T10:30:46Z	3600s	2026-10-17T09:30:46Z	2026-10-17T10:00:46Z	-	federated-token:valid:2026-10-17T10:20:00Z
 
 
-# ---- from doc/management.txt, trace <source> [<args...>]
+# ---- part of HAProxy's doc/management.txt, somewhere below the heading "trace <source> [<args...>]"
 update cloudauth credential <profile>
   Fetch at once the credential of the cloudauth profile <profile> from its
   token source (see "token <source>" in the configuration manual), even if the

@@ -1,10 +1,10 @@
-# ---- from doc/configuration.txt, Summary
+# ---- part of HAProxy's doc/configuration.txt, somewhere below the heading "Summary"
 9.9.      Cloud storage authentication
 
-# ---- from doc/configuration.txt, Summary
+# ---- part of HAProxy's doc/configuration.txt, somewhere below the heading "Summary"
 12.10.    Cloud storage authentication profiles
 
-# ---- from doc/configuration.txt, client-sigalgs <sigalgs>
+# ---- part of HAProxy's doc/configuration.txt, somewhere below the heading "client-sigalgs <sigalgs>"
 cloudauth <profile>
   May be used in the following contexts: http
 
@@ -75,7 +75,7 @@ cloudauth <profile>
   See also: "sni".
 
 
-# ---- from doc/configuration.txt, See also : "tcp-request content set-bandwidth-limit",
+# ---- part of HAProxy's doc/configuration.txt, somewhere below the heading "See also : "tcp-request content set-bandwidth-limit","
 
 9.9. Cloud storage authentication
 ---------------------------------
@@ -182,7 +182,7 @@ See also : "filter-config", "cloudauth", "retry-on", "option redispatch" and
 
 
 
-# ---- from doc/configuration.txt, tcp-check unset-var(<var-name>)
+# ---- part of HAProxy's doc/configuration.txt, somewhere below the heading "tcp-check unset-var(<var-name>)"
 
 12.10. Cloud storage authentication profiles
 --------------------------------------------

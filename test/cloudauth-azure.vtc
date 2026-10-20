@@ -29,15 +29,28 @@ server s2 {
     txresp -body "sas"
 } -start
 
-# Shared Key: the date is carried by "x-ms-date", the client "Date" is removed
-server s3 {
-    rxreq
-    expect req.url == "/devstoreaccount1/c?restype=container&comp=list"
-    expect req.http.authorization ~ "^SharedKey devstoreaccount1:[A-Za-z0-9+/]{43}=$"
-    expect req.http.x-ms-date ~ "^[A-Z][a-z]{2}, [0-9]{2} [A-Z][a-z]{2} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$"
-    expect req.http.x-ms-version == "2021-08-06"
-    expect req.http.date == <undef>
-    txresp -body "sharedkey"
+# Shared Key: the date is carried by "x-ms-date", the client "Date" is removed.
+# The storage is played by h2, which computes the signature again with the
+# account key from the expected string to sign: the method, the standard
+# headers, the canonicalized "x-ms-" headers, the ones of the client included,
+# and the canonicalized resource.
+haproxy h2 -conf {
+    global
+        nbthread 1
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    frontend az
+        bind "fd@${az}"
+        http-request set-var(txn.key) str(Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==)
+        http-request set-var-fmt(txn.sts) "GET\n\n\n\n\n\n\n\n\n\n\n\nx-ms-date:%[req.fhdr(x-ms-date)]\nx-ms-version:2021-08-06\n/devstoreaccount1/devstoreaccount1/c\ncomp:list\nrestype:container" if METH_GET
+        http-request set-var-fmt(txn.sts) "PUT\n\n\n5\n\n\n\n\n\n\n\n\nx-ms-blob-type:BlockBlob\nx-ms-date:%[req.fhdr(x-ms-date)]\nx-ms-meta-color:blue green\nx-ms-meta-tag:a,b\nx-ms-version:2021-08-06\n/devstoreaccount1/devstoreaccount1/c/blob" if METH_PUT
+        http-request set-var-fmt(txn.auth) "SharedKey devstoreaccount1:%[var(txn.sts),hmac(sha256,txn.key),base64]"
+        http-request return status 400 content-type text/plain string "bad headers" unless { req.fhdr(x-ms-date) -m reg '^[A-Z][a-z]{2}, [0-9]{2} [A-Z][a-z]{2} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT$' } { req.fhdr_cnt(x-ms-date) -m int 1 } { req.hdr(x-ms-version) -m str 2021-08-06 } !{ req.hdr(date) -m found } !{ req.hdr(x-ms-copy-source) -m found }
+        http-request return status 200 content-type text/plain string "sharedkey" if { req.fhdr(authorization),strcmp(txn.auth) eq 0 }
+        http-request return status 403 content-type text/plain lf-string "%[var(txn.sts)]"
 } -start
 
 haproxy h1 -conf {
@@ -68,6 +81,9 @@ haproxy h1 -conf {
         azure-version 2021-08-06
     frontend fe
         bind "fd@${fe}"
+        # the headers of the storage which the clients must not use are
+        # removed by the HTTP rules
+        http-request del-header x-ms-copy-source
         use_backend be_sas if { path_beg /sas/ }
         use_backend be_key if { path_beg /key/ }
         default_backend be_entra
@@ -81,7 +97,7 @@ haproxy h1 -conf {
     backend be_key
         http-request set-path %[path,regsub(^/key,/devstoreaccount1)]
         filter-config cloudauth enabled profile key host localhost
-        server srv ipv4@localhost:${s3_port}
+        server srv ipv4@localhost:${h2_az_port}
 } -start
 
 client c1 -connect ${h1_fe_sock} {
@@ -105,6 +121,15 @@ client c2 -connect ${h1_fe_sock} {
 
 client c3 -connect ${h1_fe_sock} {
     txreq -url "/key/c?restype=container&comp=list" -hdr "Date: Mon, 01 Jan 2001 00:00:00 GMT" -hdr "x-ms-date: Mon, 01 Jan 2001 00:00:00 GMT"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "sharedkey"
+
+    # a write: the "x-ms-" headers of the client are signed, the values of a
+    # same name being joined, and their spaces trimmed and squeezed
+    txreq -req PUT -url "/key/c/blob" -hdr "x-ms-meta-tag: a" -hdr "X-Ms-Blob-Type: BlockBlob" \
+        -hdr "x-ms-meta-color:  blue   green " -hdr "x-ms-meta-tag: b" -hdr "x-ms-version: 1999-01-01" \
+        -hdr "x-ms-copy-source: https://other.blob.core.windows.net/c/secret" -body "hello"
     rxresp
     expect resp.status == 200
     expect resp.body == "sharedkey"

@@ -33,10 +33,13 @@ haproxy h2 -conf {
         http-request set-var(txn.k2) var(txn.region),hmac(sha256,txn.k1),base64
         http-request set-var(txn.k3) str(storage),hmac(sha256,txn.k2),base64
         http-request set-var(txn.k4) str(goog4_request),hmac(sha256,txn.k3),base64
+        http-request set-var(txn.signed) str(host;x-goog-content-sha256;x-goog-date)
         http-request set-var-fmt(txn.creq) "%[method]\n%[req.hdr(x-test-uri)]\n%[req.hdr(x-test-query)]\nhost:%[req.hdr(host)]\nx-goog-content-sha256:UNSIGNED-PAYLOAD\nx-goog-date:%[var(txn.date)]\n\nhost;x-goog-content-sha256;x-goog-date\nUNSIGNED-PAYLOAD"
+        http-request set-var-fmt(txn.creq) "%[method]\n%[req.hdr(x-test-uri)]\n%[req.hdr(x-test-query)]\nhost:%[req.hdr(host)]\nx-goog-content-sha256:UNSIGNED-PAYLOAD\nx-goog-date:%[var(txn.date)]\nx-goog-meta-color:blue green\n\nhost;x-goog-content-sha256;x-goog-date;x-goog-meta-color\nUNSIGNED-PAYLOAD" if { req.hdr(x-goog-meta-color) -m found }
+        http-request set-var(txn.signed) str(host;x-goog-content-sha256;x-goog-date;x-goog-meta-color) if { req.hdr(x-goog-meta-color) -m found }
         http-request set-var-fmt(txn.sts) "GOOG4-HMAC-SHA256\n%[var(txn.date)]\n%[var(txn.day)]/%[var(txn.region)]/storage/goog4_request\n%[var(txn.creq),sha2(256),hex,lower]"
         http-request set-var(txn.sig) var(txn.sts),hmac(sha256,txn.k4),hex,lower
-        http-request set-var-fmt(txn.auth) "GOOG4-HMAC-SHA256 Credential=%[var(txn.id)]/%[var(txn.day)]/%[var(txn.region)]/storage/goog4_request, SignedHeaders=host;x-goog-content-sha256;x-goog-date, Signature=%[var(txn.sig)]"
+        http-request set-var-fmt(txn.auth) "GOOG4-HMAC-SHA256 Credential=%[var(txn.id)]/%[var(txn.day)]/%[var(txn.region)]/storage/goog4_request, SignedHeaders=%[var(txn.signed)], Signature=%[var(txn.sig)]"
         http-request return status 400 content-type text/plain string "bad headers" unless { req.hdr(x-goog-date) -m reg ^[0-9]{8}T[0-9]{6}Z$ } { req.hdr(x-goog-content-sha256) -m str UNSIGNED-PAYLOAD } { req.hdr_cnt(x-goog-date) -m int 1 } { req.fhdr_cnt(authorization) -m int 1 } !{ req.hdr(x-goog-user-project) -m found }
         http-request return status 200 content-type text/plain lf-string "%[var(txn.id)]" if { req.fhdr(authorization),strcmp(txn.auth) eq 0 }
         http-request return status 403 content-type text/plain lf-string "%[var(txn.creq)]"
@@ -64,6 +67,9 @@ haproxy h1 -conf {
         token "file:${tmpdir}/hmac-key"
     frontend fe
         bind "fd@${fe}"
+        # the headers of the storage which the clients must not use are
+        # removed by the HTTP rules
+        http-request del-header x-goog-user-project
         use_backend be_regional if { path_beg /regional/ }
         default_backend be_hmac
     backend be_hmac
@@ -94,6 +100,12 @@ client c1 -connect ${h1_fe_sock} {
 
     txreq -url "/regional/" -hdr "x-test-uri: /regional/" -hdr "x-test-query: " \
         -hdr "x-test-region: us-central1"
+    rxresp
+    expect resp.status == 200
+
+    # a write: the headers of the client are signed
+    txreq -req PUT -url "/bucket/object" -hdr "x-test-uri: /bucket/object" -hdr "x-test-query: " \
+        -hdr "x-test-region: auto" -hdr "x-goog-meta-color: blue  green" -body "hello"
     rxresp
     expect resp.status == 200
 } -run

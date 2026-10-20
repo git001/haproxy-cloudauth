@@ -19,8 +19,10 @@ setenv AWS_SESSION_TOKEN IQoJb3JpZ2luX2VjEXAMPLE+/PARTS=
 # converters from the expected canonical URI, canonical query string and
 # region given by the client, and from the signing key of the access key
 # identifier, derived from the secret prefixed by "AWS4" (in base64 below).
-# The session token is signed when present. The Host header must be the
-# expected one when given by the client.
+# The session token is signed when present, and the "x-amz-meta-*" and
+# "x-amz-storage-class" headers of the client when present, with their
+# canonical values. The Host header must be the expected one when given by
+# the client.
 haproxy h2 -conf {
     global
         nbthread 1
@@ -47,6 +49,8 @@ haproxy h2 -conf {
         http-request set-var(txn.signed) str(host;x-amz-content-sha256;x-amz-date)
         http-request set-var-fmt(txn.creq) "%[method]\n%[req.hdr(x-test-uri)]\n%[req.hdr(x-test-query)]\nhost:%[req.hdr(host)]\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:%[var(txn.date)]\nx-amz-security-token:%[req.hdr(x-amz-security-token)]\n\nhost;x-amz-content-sha256;x-amz-date;x-amz-security-token\nUNSIGNED-PAYLOAD" if { req.hdr(x-amz-security-token) -m found }
         http-request set-var(txn.signed) str(host;x-amz-content-sha256;x-amz-date;x-amz-security-token) if { req.hdr(x-amz-security-token) -m found }
+        http-request set-var-fmt(txn.creq) "%[method]\n%[req.hdr(x-test-uri)]\n%[req.hdr(x-test-query)]\nhost:%[req.hdr(host)]\nx-amz-content-sha256:UNSIGNED-PAYLOAD\nx-amz-date:%[var(txn.date)]\nx-amz-meta-color:blue green\nx-amz-meta-tag:a,b\nx-amz-storage-class:STANDARD_IA\n\nhost;x-amz-content-sha256;x-amz-date;x-amz-meta-color;x-amz-meta-tag;x-amz-storage-class\nUNSIGNED-PAYLOAD" if { req.hdr(x-amz-meta-color) -m found }
+        http-request set-var(txn.signed) str(host;x-amz-content-sha256;x-amz-date;x-amz-meta-color;x-amz-meta-tag;x-amz-storage-class) if { req.hdr(x-amz-meta-color) -m found }
         http-request set-var-fmt(txn.sts) "AWS4-HMAC-SHA256\n%[var(txn.date)]\n%[var(txn.day)]/%[var(txn.region)]/s3/aws4_request\n%[var(txn.creq),sha2(256),hex,lower]"
         http-request set-var(txn.sig) var(txn.sts),hmac(sha256,txn.k4),hex,lower
         http-request set-var-fmt(txn.auth) "AWS4-HMAC-SHA256 Credential=%[var(txn.id)]/%[var(txn.day)]/%[var(txn.region)]/s3/aws4_request, SignedHeaders=%[var(txn.signed)], Signature=%[var(txn.sig)]"
@@ -92,6 +96,10 @@ haproxy h1 -conf {
         token "file:${tmpdir}/access-key"
     frontend fe
         bind "fd@${fe}"
+        # the headers of the storage which the clients must not use are
+        # removed by the HTTP rules
+        http-request del-header x-amz-acl
+        http-request del-header x-amz-grant- -m beg
         # the path is doubled 7 times, up to 8192 '+' characters, which are
         # each encoded as "%2B" in the canonical request
         http-request set-path %[path]%[path] if { path_beg /long/ }
@@ -143,6 +151,16 @@ client c1 -connect ${h1_fe_sock} {
     rxresp
     expect resp.status == 200
     expect resp.body == "ASIATEMPORARYEXAMPLE;IQoJb3JpZ2luX2VjEXAMPLE+/PARTS="
+
+    # a write: the headers of the client are signed, the values of a same
+    # name being joined, and their spaces trimmed and squeezed
+    txreq -req PUT -url "/bucket/object" -hdr "x-test-uri: /bucket/object" -hdr "x-test-query: " \
+        -hdr "x-test-region: us-east-1" -hdr "x-amz-meta-color:   blue    green  " \
+        -hdr "x-amz-meta-tag: a" -hdr "X-Amz-Storage-Class: STANDARD_IA" -hdr "x-amz-meta-tag: b" \
+        -hdr "x-amz-grant-read: uri=http://acs.amazonaws.com/groups/global/AllUsers" -body "hello"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "AKIAIOSFODNN7EXAMPLE;"
 
     txreq -url "/ovh/photos/a.jpg" -hdr "Host: client.example.com" \
         -hdr "x-test-uri: /photos/a.jpg" -hdr "x-test-query: " \

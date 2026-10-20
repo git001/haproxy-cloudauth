@@ -81,10 +81,14 @@ The request is processed once its headers were analyzed, after all the HTTP
 rules of the frontend and of the backend and after the other filters, in this
 order:
 
-- the headers which may carry credentials are removed: `Authorization`,
-    `X-Auth-Token` and all the headers starting with `X-Amz-`, `X-Ms-` or
-    `X-Goog-`. This way, a client cannot use its own credentials, nor interfere
-    with the ones added by HAProxy;
+- the headers which may carry credentials, and the ones set by the signers,
+    are removed: `Authorization`, `X-Auth-Token`, `X-Amz-Content-Sha256`,
+    `X-Amz-Date`, `X-Amz-Security-Token`, `X-Goog-Content-Sha256`,
+    `X-Goog-Date`, `X-Ms-Copy-Source-Authorization`, `X-Ms-Date` and
+    `X-Ms-Version`. This way, a client cannot use its own credentials, nor
+    interfere with the ones added by HAProxy. The other headers of the
+    storages, starting with `X-Amz-`, `X-Ms-` or `X-Goog-`, are kept, and
+    signed when the signer covers them (see `signer` in section 3);
 
 - for the same reasons, the query string parameters which may carry credentials
     are removed: the parameters of the Azure shared access signatures (`sv`,
@@ -104,7 +108,31 @@ order:
 
 The Host header sent by the client is never used: with most storages, it
 designates the account or the bucket, so a client could otherwise access any
-data the credentials give access to. By default, the servers without `sni`
+data the credentials give access to.
+
+The headers of the storages sent by the clients are needed by some requests,
+mostly the writes, such as `x-ms-blob-type` with Azure, or the metadata of the
+objects (`x-amz-meta-*`, `x-ms-meta-*`, `x-goog-meta-*`). However, some of them
+let a client act with the permissions of the credentials beyond the requested
+object, and must be removed by the HTTP rules unless the clients are trusted,
+for instance the ones making an object public (`x-amz-acl`, `x-amz-grant-*`,
+`x-goog-acl`), copying an object from another one (`x-amz-copy-source`,
+`x-ms-copy-source`, `x-goog-copy-source`), or choosing the project billed for
+the requests (`x-goog-user-project`). The simplest is to only keep the needed
+ones, here the metadata and the storage class with S3, the regular expression
+requiring PCRE2 (`USE_PCRE2=1`):
+
+```
+http-request del-header ^x-amz-(?!meta-|storage-class$) -m reg
+```
+
+Or to remove the unwanted ones:
+
+```
+http-request del-header x-amz-acl
+http-request del-header x-amz-grant- -m beg
+http-request del-header x-amz-copy-source -m beg
+``` By default, the servers without `sni`
 present the Host header of the request as TLS SNI (see `sni-auto`), which is
 then `<host>` without its port. A server reached with another name must set its
 `sni`.
@@ -533,12 +561,13 @@ supported types are:
     encoded in base64 as provided by Azure. The `x-ms-date` and `x-ms-version`
     headers are added, the `Date` header of the client is removed, then the
     `Authorization: SharedKey <account>:<signature>` header is added, the
-    signature covering the method, the standard headers, the path and the query
-    string of the request (see `Authorize with Shared Key` in the Azure Storage
-    REST API documentation). The `account` keyword is mandatory. Note that the
-    account key gives access to the whole account, so a shared access signature
-    or a Microsoft Entra ID token limited to the needed data should be
-    preferred when possible.
+    signature covering the method, the standard headers, all the headers
+    starting with `x-ms-`, the ones of the client included, the path and the
+    query string of the request (see `Authorize with Shared Key` in the Azure
+    Storage REST API documentation). The `account` keyword is mandatory. Note
+    that the account key gives access to the whole account, so a shared access
+    signature or a Microsoft Entra ID token limited to the needed data should
+    be preferred when possible.
 
 - `sigv4`: the request is signed with an HMAC key, the token being
     `<access-key-id>:<secret>`, or `<access-key-id>:<secret>:<session-token>`
@@ -553,8 +582,10 @@ supported types are:
     `<algorithm> Credential=<access-key-id>/<scope>, SignedHeaders=<headers>, Signature=<signature>`,
     the signature covering the method, the path and the query string of the
     request, which are encoded again as expected by the signature, the Host
-    header and the added headers, within the credential scope made of the day,
-    the region (see `region`) and the service. The payload is not signed
+    header and all the headers starting with `x-amz-` with `provider s3` or
+    `x-goog-` with `provider google`, the added ones as well as the ones of the
+    client, within the credential scope made of the day, the region (see
+    `region`) and the service. The payload is not signed
     (`UNSIGNED-PAYLOAD`), since the request is signed before its payload is
     forwarded, so it should be protected by TLS. The access key identifier is
     not a secret, but the token is, like any other one.

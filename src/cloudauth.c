@@ -609,23 +609,28 @@ int cloudauth_sign_request(struct cloudauth_profile *prof, const struct stream *
 	return ret;
 }
 
-/* The headers which may carry credentials for a cloud storage */
+/* The headers which may carry credentials for a cloud storage, and the ones
+ * set by the signers, whatever the provider. The other headers specific to a
+ * storage are kept and signed when the signer covers them, the HTTP rules
+ * being in charge of removing the ones the clients must not use.
+ */
 static const struct ist cloudauth_cred_hdrs[] = {
 	IST("authorization"),
 	IST("x-auth-token"),
+	IST("x-amz-content-sha256"),
+	IST("x-amz-date"),
+	IST("x-amz-security-token"),
+	IST("x-goog-content-sha256"),
+	IST("x-goog-date"),
+	IST("x-ms-copy-source-authorization"),
+	IST("x-ms-date"),
+	IST("x-ms-version"),
 };
 
-/* The prefixes of the headers which may carry credentials or be signed */
-static const struct ist cloudauth_cred_hdr_pfx[] = {
-	IST("x-amz-"),
-	IST("x-ms-"),
-	IST("x-goog-"),
-};
-
-/* Removes all the headers that may carry credentials from the request in
- * <htx>, so that the client cannot impersonate HAProxy nor interfere with the
- * signature. The names of the removed headers are traced for the stream <strm>
- * and the profile <prof>.
+/* Removes the headers that may carry credentials or are set by the signers
+ * from the request in <htx>, so that the client cannot impersonate HAProxy nor
+ * interfere with the signature. The names of the removed headers are traced
+ * for the stream <strm> and the profile <prof>.
  */
 static void cloudauth_strip_cred_headers(struct htx *htx, const struct stream *strm,
                                          const struct cloudauth_profile *prof)
@@ -637,14 +642,6 @@ static void cloudauth_strip_cred_headers(struct htx *htx, const struct stream *s
 	for (i = 0; i < sizeof(cloudauth_cred_hdrs) / sizeof(*cloudauth_cred_hdrs); i++) {
 		ctx.blk = NULL;
 		while (http_find_header(htx, cloudauth_cred_hdrs[i], &ctx, 1)) {
-			name = htx_get_blk_name(htx, ctx.blk);
-			TRACE_STATE("client credential header removed", CLOUDAUTH_EV_STRIP, strm, prof, &name);
-			http_remove_header(htx, &ctx);
-		}
-	}
-	for (i = 0; i < sizeof(cloudauth_cred_hdr_pfx) / sizeof(*cloudauth_cred_hdr_pfx); i++) {
-		ctx.blk = NULL;
-		while (http_find_pfx_header(htx, cloudauth_cred_hdr_pfx[i], &ctx, 1)) {
 			name = htx_get_blk_name(htx, ctx.blk);
 			TRACE_STATE("client credential header removed", CLOUDAUTH_EV_STRIP, strm, prof, &name);
 			http_remove_header(htx, &ctx);

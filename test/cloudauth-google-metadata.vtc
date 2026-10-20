@@ -28,7 +28,8 @@ server s3 -repeat 10 {
     txresp -status 503 -hdr "Content-Type: text/plain" -body "do not report this"
 } -start
 
-# the storage, the client credentials must be replaced
+# the storage, the client credentials must be replaced, and the header removed
+# by the HTTP rules must not be sent
 server s4 -repeat 2 {
     rxreq
     expect req.http.authorization == "Bearer metadata-token"
@@ -73,6 +74,8 @@ haproxy h1 -conf {
         fetch-max-backoff 10s
     frontend fe
         bind "fd@${fe}"
+        # the client must not choose the project billed for the requests
+        http-request del-header x-goog-user-project
         use_backend be_scoped if { path_beg /scoped/ }
         default_backend be_metadata
     backend be_metadata

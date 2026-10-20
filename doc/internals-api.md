@@ -34,9 +34,10 @@ HAProxy. It is made of:
 
 The request is authenticated by `cloudauth_authenticate()` in this order: the
 headers and the query string parameters which may carry credentials are
-removed, the Host header is set to the host of the filter, then the request is
-signed by the provider, or with the bearer token without provider. The
-signature is computed last since it may cover the other headers.
+removed, as well as the headers set by the signers, the Host header is set to
+the host of the filter, then the request is signed by the provider, or with the
+bearer token without provider. The signature is computed last since it may
+cover the other headers, including the ones of the storage sent by the client.
 
 A profile selects a provider with `provider <name>`, a signer with
 `signer <type>` among the generic types `bearer`, `sas`, `sharedkey` and

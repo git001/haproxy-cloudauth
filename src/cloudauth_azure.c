@@ -35,6 +35,7 @@
 #include <haproxy/chunk.h>
 #include <haproxy/clock.h>
 #include <haproxy/errors.h>
+#include <haproxy/global.h>
 #include <haproxy/http.h>
 #include <haproxy/http_htx.h>
 #include <haproxy/htx.h>
@@ -913,6 +914,7 @@ struct cloudauth_provider cloudauth_azure_provider = {
 };
 
 INITCALL1(STG_REGISTER, cloudauth_register_provider, &cloudauth_azure_provider);
+REGISTER_BUILD_OPTS("Built with the cloudauth provider: azure (Azure Blob Storage).");
 
 /* Returns the Azure settings of the profile being parsed, or NULL with <err>
  * filled if it does not use "provider azure", <kw> being the keyword parsed.

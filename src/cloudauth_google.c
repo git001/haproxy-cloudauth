@@ -29,6 +29,7 @@
 #include <haproxy/chunk.h>
 #include <haproxy/clock.h>
 #include <haproxy/errors.h>
+#include <haproxy/global.h>
 #include <haproxy/http.h>
 #include <haproxy/init.h>
 #include <haproxy/tools.h>
@@ -651,6 +652,7 @@ struct cloudauth_provider cloudauth_google_provider = {
 };
 
 INITCALL1(STG_REGISTER, cloudauth_register_provider, &cloudauth_google_provider);
+REGISTER_BUILD_OPTS("Built with the cloudauth provider: google (Google Cloud Storage).");
 
 /* Returns the Google settings of the profile being parsed, or NULL with <err>
  * filled if it does not use "provider google", <kw> being the keyword parsed.

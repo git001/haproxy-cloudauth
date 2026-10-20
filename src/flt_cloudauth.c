@@ -258,3 +258,4 @@ static void cloudauth_flt_register_class(void)
 }
 
 INITCALL0(STG_REGISTER, cloudauth_flt_register_class);
+REGISTER_BUILD_OPTS("Built with the cloudauth filter.");

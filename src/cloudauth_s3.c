@@ -35,6 +35,7 @@
 #include <haproxy/cfgparse.h>
 #include <haproxy/chunk.h>
 #include <haproxy/errors.h>
+#include <haproxy/global.h>
 #include <haproxy/http.h>
 #include <haproxy/init.h>
 #include <haproxy/tools.h>
@@ -1040,6 +1041,7 @@ struct cloudauth_provider cloudauth_s3_provider = {
 };
 
 INITCALL1(STG_REGISTER, cloudauth_register_provider, &cloudauth_s3_provider);
+REGISTER_BUILD_OPTS("Built with the cloudauth provider: s3 (S3 compatible storages).");
 
 /* Returns the S3 settings of the profile being parsed, or NULL with <err>
  * filled if it does not use "provider s3", <kw> being the keyword parsed.

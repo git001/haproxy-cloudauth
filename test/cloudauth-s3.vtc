@@ -19,7 +19,8 @@ setenv AWS_SESSION_TOKEN IQoJb3JpZ2luX2VjEXAMPLE+/PARTS=
 # converters from the expected canonical URI, canonical query string and
 # region given by the client, and from the signing key of the access key
 # identifier, derived from the secret prefixed by "AWS4" (in base64 below).
-# The session token is signed when present.
+# The session token is signed when present. The Host header must be the
+# expected one when given by the client.
 haproxy h2 -conf {
     global
         nbthread 1
@@ -33,6 +34,8 @@ haproxy h2 -conf {
         http-request set-var(txn.date) req.hdr(x-amz-date)
         http-request set-var(txn.day) var(txn.date),bytes(0,8)
         http-request set-var(txn.region) req.hdr(x-test-region)
+        http-request set-var(txn.host) req.hdr(x-test-host)
+        http-request return status 400 content-type text/plain string "bad host" if { req.hdr(x-test-host) -m found } !{ req.hdr(host),strcmp(txn.host) eq 0 }
         http-request set-var(txn.id) req.fhdr(authorization),word(2,' '),field(1,/),bytes(11)
         http-request set-var(txn.k0) str(QVdTNHdKYWxyWFV0bkZFTUkvSzdNREVORy9iUHhSZmlDWUVYQU1QTEVLRVk=) if { var(txn.id) -m str AKIAIOSFODNN7EXAMPLE }
         http-request set-var(txn.k0) str(QVdTNGMyVnpjMmx2YmkxelpXTnlaWFF0YTJWNUxXWnZjaTEwYUdVdGRHVnpkSE0=) if { var(txn.id) -m str ASIATEMPORARYEXAMPLE }
@@ -74,6 +77,19 @@ haproxy h1 -conf {
         signer sigv4
         region eu-west-1
         token "file:${tmpdir}/access-key-id" env:AWS_SECRET_ACCESS_KEY env:AWS_SESSION_TOKEN
+    # OVHcloud Object Storage: region code of the endpoint, bucket in the
+    # host name (virtual-hosted style)
+    cloudauth ovh
+        provider s3
+        signer sigv4
+        region gra
+        token "file:${tmpdir}/access-key"
+    # STACKIT Object Storage: region code of the endpoint, bucket in the path
+    cloudauth stackit
+        provider s3
+        signer sigv4
+        region eu01
+        token "file:${tmpdir}/access-key"
     frontend fe
         bind "fd@${fe}"
         # the path is doubled 7 times, up to 8192 '+' characters, which are
@@ -86,12 +102,22 @@ haproxy h1 -conf {
         http-request set-path %[path]%[path] if { path_beg /long/ }
         http-request set-path %[path]%[path] if { path_beg /long/ }
         use_backend be_parts if { path_beg /parts/ }
+        use_backend be_ovh if { path_beg /ovh/ }
+        use_backend be_stackit if { path_beg /stackit/ }
         default_backend be_s3
     backend be_s3
         filter-config cloudauth enabled profile s3 host localhost
         server srv ipv4@localhost:${h2_s3_port}
     backend be_parts
         filter-config cloudauth enabled profile parts host localhost
+        server srv ipv4@localhost:${h2_s3_port}
+    backend be_ovh
+        http-request set-path %[path,regsub(^/ovh,)]
+        filter-config cloudauth enabled profile ovh host mybucket.s3.gra.io.cloud.ovh.net
+        server srv ipv4@localhost:${h2_s3_port}
+    backend be_stackit
+        http-request set-path %[path,regsub(^/stackit,/mybucket)]
+        filter-config cloudauth enabled profile stackit host object.storage.eu01.onstackit.cloud
         server srv ipv4@localhost:${h2_s3_port}
 } -start
 
@@ -117,6 +143,20 @@ client c1 -connect ${h1_fe_sock} {
     rxresp
     expect resp.status == 200
     expect resp.body == "ASIATEMPORARYEXAMPLE;IQoJb3JpZ2luX2VjEXAMPLE+/PARTS="
+
+    txreq -url "/ovh/photos/a.jpg" -hdr "Host: client.example.com" \
+        -hdr "x-test-uri: /photos/a.jpg" -hdr "x-test-query: " \
+        -hdr "x-test-region: gra" -hdr "x-test-host: mybucket.s3.gra.io.cloud.ovh.net"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "AKIAIOSFODNN7EXAMPLE;"
+
+    txreq -url "/stackit/photos/a.jpg" -hdr "Host: client.example.com" \
+        -hdr "x-test-uri: /mybucket/photos/a.jpg" -hdr "x-test-query: " \
+        -hdr "x-test-region: eu01" -hdr "x-test-host: object.storage.eu01.onstackit.cloud"
+    rxresp
+    expect resp.status == 200
+    expect resp.body == "AKIAIOSFODNN7EXAMPLE;"
 } -run
 
 # a canonical request which does not fit in a buffer, see h1
@@ -133,6 +173,16 @@ client c3 -connect ${h1_fe_sock} {
 haproxy h1 -cli {
     send "show events buf0"
     expect ~ "sigv4 credential scope : profile=s3 \\([0-9]{8}/us-east-1/s3/aws4_request\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "sigv4 credential scope : profile=ovh \\([0-9]{8}/gra/s3/aws4_request\\)"
+}
+
+haproxy h1 -cli {
+    send "show events buf0"
+    expect ~ "sigv4 credential scope : profile=stackit \\([0-9]{8}/eu01/s3/aws4_request\\)"
 }
 
 haproxy h1 -cli {

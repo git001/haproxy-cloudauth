@@ -460,13 +460,13 @@ on the build options (see above):
     and `token workload-identity`), and `sigv4` with an HMAC key, only accepted
     by the XML API. The default region of `sigv4` is `auto`.
 
-- `s3`: Amazon S3 and the storages compatible with it (MinIO, Ceph...). The
-    supported signer is `sigv4` with an access key, permanent or temporary with
-    its session token. The region is mandatory (see `region`). The temporary
-    access keys of the containers, of the workload identities and of the EC2
-    instances may be fetched by HAProxy (see `token container`,
-    `token pod-identity`, `token workload-identity` and
-    `token instance-metadata`).
+- `s3`: Amazon S3 and the storages compatible with it (MinIO, Ceph, OVHcloud
+    Object Storage, STACKIT Object Storage...). The supported signer is
+    `sigv4` with an access key, permanent or temporary with its session token.
+    The region is mandatory (see `region`). The temporary access keys of the
+    containers, of the workload identities and of the EC2 instances may be
+    fetched by HAProxy (see `token container`, `token pod-identity`,
+    `token workload-identity` and `token instance-metadata`).
 
 ### region
 
@@ -476,8 +476,9 @@ region <name>
 
 Sets the region of the storage, which is part of the signatures of the `sigv4`
 signer, instead of the default one of the provider (see `provider`). It is made
-of up to 64 letters, digits, dashes and underscores, such as `us-east-1`. It is
-only accepted with the `sigv4` signer, and mandatory with the providers without
+of up to 64 letters, digits, dashes and underscores, such as `us-east-1`, `gra`
+with OVHcloud Object Storage or `eu01` with STACKIT Object Storage. It is only
+accepted with the `sigv4` signer, and mandatory with the providers without
 default region, such as `s3`. Note that a wrong region is only reported by the
 storage, which rejects the signature.
 
@@ -961,6 +962,45 @@ backend s3
     http-request set-path /mybucket%[path]
     filter-config cloudauth enabled profile s3-key host s3.eu-west-1.amazonaws.com
     server s3 s3.eu-west-1.amazonaws.com:443 ssl verify required ca-file @system-ca
+```
+
+Example with OVHcloud Object Storage, through its S3 compatible API, the bucket
+name being part of the host name (virtual-hosted style). The region is the one
+of the endpoint `s3.<region>.io.cloud.ovh.net`, in lower case, and the access
+key is the S3 credential of an OVHcloud Public Cloud user:
+
+```
+cloudauth ovh-key
+    provider s3
+    signer sigv4
+    region gra
+    token env:OVH_S3_ACCESS_KEY env:OVH_S3_SECRET_KEY
+
+backend ovh
+    mode http
+    http-request normalize-uri path-strip-dotdot full
+    filter-config cloudauth enabled profile ovh-key host mybucket.s3.gra.io.cloud.ovh.net
+    server ovh mybucket.s3.gra.io.cloud.ovh.net:443 ssl verify required ca-file @system-ca
+```
+
+Example with STACKIT Object Storage, through its S3 compatible API, the bucket
+name being added to the path. The region is the one of the endpoint
+`object.storage.<region>.onstackit.cloud`, and the access key is a credential
+of the Object Storage of the project:
+
+```
+cloudauth stackit-key
+    provider s3
+    signer sigv4
+    region eu01
+    token env:STACKIT_S3_ACCESS_KEY env:STACKIT_S3_SECRET_KEY
+
+backend stackit
+    mode http
+    http-request normalize-uri path-strip-dotdot full
+    http-request set-path /mybucket%[path]
+    filter-config cloudauth enabled profile stackit-key host object.storage.eu01.onstackit.cloud
+    server stackit object.storage.eu01.onstackit.cloud:443 ssl verify required ca-file @system-ca
 ```
 
 ### token-endpoint

@@ -115,6 +115,18 @@ podman build --target test .
 The HAProxy and OpenTelemetry filter versions are set with the `HAPROXY_REF`
 and `OTEL_FILTER_REF` build arguments, see the `Containerfile` for the others.
 
+The image is used like the official HAProxy images: it runs HAProxy in
+master-worker mode with `/usr/local/etc/haproxy/haproxy.cfg`, and the arguments
+which are only options are passed to HAProxy:
+
+```
+podman run --rm -v ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro \
+    -e CLOUDAUTH_TOKEN haproxy-cloudauth
+podman run --rm haproxy-cloudauth -vv
+podman run --rm -v ./haproxy.cfg:/tmp/haproxy.cfg:ro haproxy-cloudauth \
+    -c -f /tmp/haproxy.cfg
+```
+
 ### License
 
 The license model of HAProxy applies: GPL-2.0-or-later for the files in

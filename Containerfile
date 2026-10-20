@@ -143,6 +143,7 @@ RUN apt-get update \
 COPY --from=build /opt/lib/ /opt/lib/
 COPY --from=build /usr/src/haproxy/haproxy /usr/local/sbin/haproxy
 COPY --from=build /usr/src/haproxy/examples/errorfiles/ /usr/local/etc/haproxy/errors
+COPY --chmod=755 docker-entrypoint.sh /
 
 RUN find /opt/lib -mindepth 1 -maxdepth 1 ! -name '*.so*' -exec rm -rf {} + \
  && echo /opt/lib > /etc/ld.so.conf.d/opt.conf \
@@ -157,4 +158,7 @@ RUN find /opt/lib -mindepth 1 -maxdepth 1 ! -name '*.so*' -exec rm -rf {} + \
 
 STOPSIGNAL SIGUSR1
 
-CMD ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+# The entrypoint adds "-W -db" to the haproxy command, and runs haproxy as well
+# when the arguments are only options (e.g. "-vv").
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["haproxy", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]

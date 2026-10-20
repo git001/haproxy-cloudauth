@@ -2,12 +2,100 @@
 
 The cloudauth filter lets HAProxy authenticate the requests it sends to cloud
 object storages: Azure Blob Storage, Google Cloud Storage and S3 compatible
-storages. The credentials are given by the administrator (environment, file
-read at parse time, CLI) or fetched by HAProxy itself from the usual sources of
-each cloud, refreshed in the background and never logged.
+storages. The clients need no credential, and cannot use their own ones. The
+credentials are given by the administrator (environment, file read at parse
+time, CLI) or fetched by HAProxy itself from the usual sources of each cloud
+(managed identities, workload identities, instance metadata, STS...),
+refreshed in the background and never logged.
 
-The filter is built as an addon outside the HAProxy source tree, without any
-change to HAProxy itself.
+The filter is built as an addon of HAProxy, without any change to HAProxy
+itself.
 
-**Status: work in progress.** The filter was first written inside the HAProxy
-source tree and is being turned into an addon; it does not build yet.
+**Status: experimental.** The configuration must enable
+`expose-experimental-directives`, and the syntax may still change.
+
+### Requirements
+
+- HAProxy 3.5 or newer, whose filter API allows an addon to register its
+  filter class (`filter_register_class()`), built with an OpenSSL compatible
+  library (`USE_OPENSSL=1`).
+- No other library.
+
+### Building
+
+The filter is built with the HAProxy sources, by listing the directory of this
+repository in the `EXTRA_MAKE` variable of the HAProxy Makefile:
+
+```
+cd /path/to/haproxy
+make -j$(nproc) TARGET=linux-glibc USE_OPENSSL=1 EXTRA_MAKE=/path/to/haproxy-cloudauth
+./haproxy -vv | grep cloudauth
+```
+
+All the storage providers are built by default. Each one may be left out by
+setting its variable to 0: `CLOUDAUTH_AZURE=0`, `CLOUDAUTH_GOOGLE=0` or
+`CLOUDAUTH_S3=0`.
+
+The objects of the filter are built in its own `src/` directory. When it is
+built with several HAProxy source trees or with other build options, run
+`make clean` in the HAProxy tree before, which also removes them.
+
+### Example
+
+```
+global
+    expose-experimental-directives
+
+# a credential profile: here, the access key of an S3 user, read from the
+# environment when the configuration is parsed
+cloudauth s3-key
+    provider s3
+    signer sigv4
+    region eu-west-1
+    token env:AWS_ACCESS_KEY_ID env:AWS_SECRET_ACCESS_KEY
+
+frontend www
+    mode http
+    bind :8080
+    default_backend s3
+
+backend s3
+    mode http
+    http-request deny unless METH_GET or METH_HEAD
+    http-request normalize-uri path-strip-dotdot full
+    http-request set-path /mybucket%[path]
+    filter-config cloudauth enabled profile s3-key host s3.eu-west-1.amazonaws.com
+    server s3 s3.eu-west-1.amazonaws.com:443 ssl verify required ca-file @system-ca
+```
+
+### Documentation
+
+- [doc/configuration.md](doc/configuration.md): the filter, the credential
+  profiles and their token sources, for each provider.
+- [doc/management.md](doc/management.md): the CLI commands, to inspect the
+  profiles and to inject the credentials.
+- [doc/internals-api.md](doc/internals-api.md): the internal API, for the
+  developers of the providers.
+
+They are written in Markdown, and may be turned into other formats with
+[pandoc](https://pandoc.org/), for instance into a PDF:
+
+```
+pandoc --toc -o configuration.pdf doc/configuration.md
+```
+
+### Tests
+
+The regression tests use [VTest](https://github.com/vtest/VTest2) and the
+`scripts/run-regtests.sh` script of the HAProxy source tree the filter was
+built in. The unit tests are run too when HAProxy was built with
+`DEBUG="-DDEBUG_UNIT"`:
+
+```
+HAPROXY_DIR=/path/to/haproxy VTEST_PROGRAM=/path/to/vtest test/run.sh
+```
+
+### License
+
+The license model of HAProxy applies: GPL-2.0-or-later for the files in
+`src/`, LGPL-2.1-or-later for the files in `include/`, see [LICENSE](LICENSE).

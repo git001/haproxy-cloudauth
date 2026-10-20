@@ -19,14 +19,15 @@
 #include <haproxy/api.h>
 #include <haproxy/chunk.h>
 #include <haproxy/clock.h>
-#include <haproxy/cloudauth_common.h>
-#include <haproxy/cloudauth_sigv4.h>
-#include <haproxy/cloudauth_trace.h>
 #include <haproxy/http_htx.h>
 #include <haproxy/htx.h>
 #include <haproxy/openssl-compat.h>
 #include <haproxy/tools.h>
 #include <haproxy/trace.h>
+
+#include <cloudauth/cloudauth_common.h>
+#include <cloudauth/cloudauth_sigv4.h>
+#include <cloudauth/cloudauth_trace.h>
 
 /* The hash of the payload of the signed requests, which is not signed */
 #define CLOUDAUTH_SIGV4_UNSIGNED_PAYLOAD "UNSIGNED-PAYLOAD"

@@ -19,9 +19,6 @@
 #include <haproxy/api.h>
 #include <haproxy/chunk.h>
 #include <haproxy/clock.h>
-#include <haproxy/cloudauth.h>
-#include <haproxy/cloudauth_common.h>
-#include <haproxy/cloudauth_trace.h>
 #include <haproxy/errors.h>
 #include <haproxy/http_client.h>
 #include <haproxy/log.h>
@@ -29,6 +26,10 @@
 #include <haproxy/ticks.h>
 #include <haproxy/tools.h>
 #include <haproxy/trace.h>
+
+#include <cloudauth/cloudauth.h>
+#include <cloudauth/cloudauth_common.h>
+#include <cloudauth/cloudauth_trace.h>
 
 /* The proxy of the HTTP client, only created if a profile fetches its
  * credential.

@@ -1,5 +1,5 @@
 /*
- * include/haproxy/cloudauth-t.h
+ * include/cloudauth/cloudauth-t.h
  * Cloud storage authentication: type definitions.
  *
  * Copyright 2026 Aleksandar Lazic <al-haproxy@none.at>
@@ -10,8 +10,8 @@
  * version 2.1 of the License, or (at your option) any later version.
  */
 
-#ifndef _HAPROXY_CLOUDAUTH_T_H
-#define _HAPROXY_CLOUDAUTH_T_H
+#ifndef _CLOUDAUTH_T_H
+#define _CLOUDAUTH_T_H
 
 #include <import/ist.h>
 
@@ -274,4 +274,4 @@ struct cloudauth_srv {
 	struct cloudauth_profile *profile;  /* the profile, once resolved */
 };
 
-#endif /* _HAPROXY_CLOUDAUTH_T_H */
+#endif /* _CLOUDAUTH_T_H */

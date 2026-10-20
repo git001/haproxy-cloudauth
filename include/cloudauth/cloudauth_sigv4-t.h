@@ -1,5 +1,5 @@
 /*
- * include/haproxy/cloudauth_sigv4-t.h
+ * include/cloudauth/cloudauth_sigv4-t.h
  * Cloud storage authentication: Signature Version 4 (sigv4), type
  * definitions.
  *
@@ -11,8 +11,8 @@
  * version 2.1 of the License, or (at your option) any later version.
  */
 
-#ifndef _HAPROXY_CLOUDAUTH_SIGV4_T_H
-#define _HAPROXY_CLOUDAUTH_SIGV4_T_H
+#ifndef _CLOUDAUTH_SIGV4_T_H
+#define _CLOUDAUTH_SIGV4_T_H
 
 #include <import/ist.h>
 
@@ -44,4 +44,4 @@ struct cloudauth_sigv4 {
 	const char *region;             /* region used without "region", or NULL if it is mandatory */
 };
 
-#endif /* _HAPROXY_CLOUDAUTH_SIGV4_T_H */
+#endif /* _CLOUDAUTH_SIGV4_T_H */

@@ -1,5 +1,5 @@
 /*
- * include/haproxy/cloudauth_trace.h
+ * include/cloudauth/cloudauth_trace.h
  * Cloud storage authentication: traces.
  *
  * Copyright 2026 Aleksandar Lazic <al-haproxy@none.at>
@@ -10,8 +10,8 @@
  * version 2.1 of the License, or (at your option) any later version.
  */
 
-#ifndef _HAPROXY_CLOUDAUTH_TRACE_H
-#define _HAPROXY_CLOUDAUTH_TRACE_H
+#ifndef _CLOUDAUTH_TRACE_H
+#define _CLOUDAUTH_TRACE_H
 
 #include <haproxy/trace-t.h>
 
@@ -30,4 +30,4 @@ extern struct trace_source trace_cloudauth;
 
 #define TRACE_SOURCE &trace_cloudauth
 
-#endif /* _HAPROXY_CLOUDAUTH_TRACE_H */
+#endif /* _CLOUDAUTH_TRACE_H */

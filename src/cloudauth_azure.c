@@ -34,10 +34,6 @@
 #include <haproxy/cfgparse.h>
 #include <haproxy/chunk.h>
 #include <haproxy/clock.h>
-#include <haproxy/cloudauth.h>
-#include <haproxy/cloudauth_azure.h>
-#include <haproxy/cloudauth_common.h>
-#include <haproxy/cloudauth_trace.h>
 #include <haproxy/errors.h>
 #include <haproxy/http.h>
 #include <haproxy/http_htx.h>
@@ -46,6 +42,11 @@
 #include <haproxy/openssl-compat.h>
 #include <haproxy/tools.h>
 #include <haproxy/trace.h>
+
+#include <cloudauth/cloudauth.h>
+#include <cloudauth/cloudauth_azure.h>
+#include <cloudauth/cloudauth_common.h>
+#include <cloudauth/cloudauth_trace.h>
 
 /* The standard headers covered by a Shared Key signature, in their order in
  * the string to sign.

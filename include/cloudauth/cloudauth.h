@@ -1,5 +1,5 @@
 /*
- * include/haproxy/cloudauth.h
+ * include/cloudauth/cloudauth.h
  * Cloud storage authentication: functions and variables.
  *
  * Copyright 2026 Aleksandar Lazic <al-haproxy@none.at>
@@ -10,12 +10,13 @@
  * version 2.1 of the License, or (at your option) any later version.
  */
 
-#ifndef _HAPROXY_CLOUDAUTH_H
-#define _HAPROXY_CLOUDAUTH_H
+#ifndef _CLOUDAUTH_H
+#define _CLOUDAUTH_H
 
-#include <haproxy/cloudauth-t.h>
 #include <haproxy/istbuf.h>
 #include <haproxy/server-t.h>
+
+#include <cloudauth/cloudauth-t.h>
 
 struct htx;
 struct session;
@@ -61,4 +62,4 @@ static inline int cloudauth_srv_enabled(const struct server *srv)
 #endif
 }
 
-#endif /* _HAPROXY_CLOUDAUTH_H */
+#endif /* _CLOUDAUTH_H */

@@ -1,5 +1,5 @@
 /*
- * include/haproxy/cloudauth_google-t.h
+ * include/cloudauth/cloudauth_google-t.h
  * Cloud storage authentication: Google Cloud Storage provider, type
  * definitions.
  *
@@ -11,8 +11,8 @@
  * version 2.1 of the License, or (at your option) any later version.
  */
 
-#ifndef _HAPROXY_CLOUDAUTH_GOOGLE_T_H
-#define _HAPROXY_CLOUDAUTH_GOOGLE_T_H
+#ifndef _CLOUDAUTH_GOOGLE_T_H
+#define _CLOUDAUTH_GOOGLE_T_H
 
 #include <import/ist.h>
 
@@ -86,4 +86,4 @@ struct cloudauth_google_ctx {
 	char *wi_token_url;             /* Security Token Service endpoint ("token_url"), or NULL */
 };
 
-#endif /* _HAPROXY_CLOUDAUTH_GOOGLE_T_H */
+#endif /* _CLOUDAUTH_GOOGLE_T_H */

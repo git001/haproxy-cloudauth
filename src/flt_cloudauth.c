@@ -14,7 +14,6 @@
  */
 
 #include <haproxy/api.h>
-#include <haproxy/cloudauth.h>
 #include <haproxy/filters.h>
 #include <haproxy/global.h>
 #include <haproxy/http_ana.h>
@@ -26,6 +25,8 @@
 #include <haproxy/stream.h>
 #include <haproxy/tools.h>
 #include <haproxy/vars.h>
+
+#include <cloudauth/cloudauth.h>
 
 const char *cloudauth_filter_cls_name = "cloudauth";
 static const char *cloudauth_flt_id = "cloudauth filter";

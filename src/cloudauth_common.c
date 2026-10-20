@@ -15,7 +15,6 @@
 #include <haproxy/base64.h>
 #include <haproxy/chunk.h>
 #include <haproxy/clock.h>
-#include <haproxy/cloudauth_common.h>
 #include <haproxy/errors.h>
 #include <haproxy/http.h>
 #include <haproxy/http_htx.h>
@@ -25,6 +24,8 @@
 #include <haproxy/istbuf.h>
 #include <haproxy/openssl-compat.h>
 #include <haproxy/tools.h>
+
+#include <cloudauth/cloudauth_common.h>
 
 /* Checks that all the characters of <s> satisfy <valid>, which is one of the
  * character classification functions such as isgraph(). Returns the position

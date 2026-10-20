@@ -1,5 +1,5 @@
 /*
- * include/haproxy/cloudauth_common.h
+ * include/cloudauth/cloudauth_common.h
  * Cloud storage authentication: helpers shared by the providers.
  *
  * Copyright 2026 Aleksandar Lazic <al-haproxy@none.at>
@@ -10,8 +10,8 @@
  * version 2.1 of the License, or (at your option) any later version.
  */
 
-#ifndef _HAPROXY_CLOUDAUTH_COMMON_H
-#define _HAPROXY_CLOUDAUTH_COMMON_H
+#ifndef _CLOUDAUTH_COMMON_H
+#define _CLOUDAUTH_COMMON_H
 
 #include <sys/types.h>
 #include <time.h>
@@ -74,4 +74,4 @@ EVP_PKEY *cloudauth_pem_private_key(const struct ist pem, struct ist password);
 int cloudauth_jwt_sign(struct buffer *out, const struct ist header, const struct ist claims,
                        EVP_PKEY *key, enum jwt_alg alg, char **err);
 
-#endif /* _HAPROXY_CLOUDAUTH_COMMON_H */
+#endif /* _CLOUDAUTH_COMMON_H */

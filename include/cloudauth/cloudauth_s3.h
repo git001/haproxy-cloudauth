@@ -1,5 +1,5 @@
 /*
- * include/haproxy/cloudauth_s3.h
+ * include/cloudauth/cloudauth_s3.h
  * Cloud storage authentication: Amazon S3 and compatible storages provider,
  * functions and variables.
  *
@@ -11,12 +11,12 @@
  * version 2.1 of the License, or (at your option) any later version.
  */
 
-#ifndef _HAPROXY_CLOUDAUTH_S3_H
-#define _HAPROXY_CLOUDAUTH_S3_H
+#ifndef _CLOUDAUTH_S3_H
+#define _CLOUDAUTH_S3_H
 
-#include <haproxy/cloudauth-t.h>
-#include <haproxy/cloudauth_s3-t.h>
+#include <cloudauth/cloudauth-t.h>
+#include <cloudauth/cloudauth_s3-t.h>
 
 extern struct cloudauth_provider cloudauth_s3_provider;
 
-#endif /* _HAPROXY_CLOUDAUTH_S3_H */
+#endif /* _CLOUDAUTH_S3_H */

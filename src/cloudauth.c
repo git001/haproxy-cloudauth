@@ -25,10 +25,6 @@
 #include <haproxy/cfgparse.h>
 #include <haproxy/cli.h>
 #include <haproxy/clock.h>
-#include <haproxy/cloudauth.h>
-#include <haproxy/cloudauth_common.h>
-#include <haproxy/cloudauth_sigv4.h>
-#include <haproxy/cloudauth_trace.h>
 #include <haproxy/errors.h>
 #include <haproxy/filters.h>
 #include <haproxy/global.h>
@@ -45,6 +41,11 @@
 #include <haproxy/ticks.h>
 #include <haproxy/tools.h>
 #include <haproxy/trace.h>
+
+#include <cloudauth/cloudauth.h>
+#include <cloudauth/cloudauth_common.h>
+#include <cloudauth/cloudauth_sigv4.h>
+#include <cloudauth/cloudauth_trace.h>
 
 /* cloudauth stats module, for the backends and the servers */
 enum {

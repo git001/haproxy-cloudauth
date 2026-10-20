@@ -1,5 +1,5 @@
 /*
- * include/haproxy/cloudauth_azure-t.h
+ * include/cloudauth/cloudauth_azure-t.h
  * Cloud storage authentication: Azure Blob Storage provider, type definitions.
  *
  * Copyright 2026 Aleksandar Lazic <al-haproxy@none.at>
@@ -10,8 +10,8 @@
  * version 2.1 of the License, or (at your option) any later version.
  */
 
-#ifndef _HAPROXY_CLOUDAUTH_AZURE_T_H
-#define _HAPROXY_CLOUDAUTH_AZURE_T_H
+#ifndef _CLOUDAUTH_AZURE_T_H
+#define _CLOUDAUTH_AZURE_T_H
 
 #include <import/ist.h>
 
@@ -89,4 +89,4 @@ struct cloudauth_azure_ctx {
 	char cert_x5t[CLOUDAUTH_AZURE_X5T_SIZE]; /* SHA-256 thumbprint of the certificate, in base64url */
 };
 
-#endif /* _HAPROXY_CLOUDAUTH_AZURE_T_H */
+#endif /* _CLOUDAUTH_AZURE_T_H */

@@ -1,5 +1,5 @@
 /*
- * include/haproxy/cloudauth_azure.h
+ * include/cloudauth/cloudauth_azure.h
  * Cloud storage authentication: Azure Blob Storage provider, functions and
  * variables.
  *
@@ -11,12 +11,12 @@
  * version 2.1 of the License, or (at your option) any later version.
  */
 
-#ifndef _HAPROXY_CLOUDAUTH_AZURE_H
-#define _HAPROXY_CLOUDAUTH_AZURE_H
+#ifndef _CLOUDAUTH_AZURE_H
+#define _CLOUDAUTH_AZURE_H
 
-#include <haproxy/cloudauth-t.h>
-#include <haproxy/cloudauth_azure-t.h>
+#include <cloudauth/cloudauth-t.h>
+#include <cloudauth/cloudauth_azure-t.h>
 
 extern struct cloudauth_provider cloudauth_azure_provider;
 
-#endif /* _HAPROXY_CLOUDAUTH_AZURE_H */
+#endif /* _CLOUDAUTH_AZURE_H */

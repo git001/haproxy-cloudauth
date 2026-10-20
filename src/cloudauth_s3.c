@@ -34,16 +34,17 @@
 #include <haproxy/api.h>
 #include <haproxy/cfgparse.h>
 #include <haproxy/chunk.h>
-#include <haproxy/cloudauth.h>
-#include <haproxy/cloudauth_common.h>
-#include <haproxy/cloudauth_s3.h>
-#include <haproxy/cloudauth_sigv4-t.h>
-#include <haproxy/cloudauth_trace.h>
 #include <haproxy/errors.h>
 #include <haproxy/http.h>
 #include <haproxy/init.h>
 #include <haproxy/tools.h>
 #include <haproxy/trace.h>
+
+#include <cloudauth/cloudauth.h>
+#include <cloudauth/cloudauth_common.h>
+#include <cloudauth/cloudauth_s3.h>
+#include <cloudauth/cloudauth_sigv4-t.h>
+#include <cloudauth/cloudauth_trace.h>
 
 /* The variant of Signature Version 4 of Amazon S3, without default region */
 static const struct cloudauth_sigv4 cloudauth_s3_sigv4 = {

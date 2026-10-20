@@ -17,10 +17,11 @@
 
 #include <haproxy/api.h>
 #include <haproxy/chunk.h>
-#include <haproxy/cloudauth-t.h>
-#include <haproxy/cloudauth_trace.h>
 #include <haproxy/init.h>
 #include <haproxy/trace.h>
+
+#include <cloudauth/cloudauth-t.h>
+#include <cloudauth/cloudauth_trace.h>
 
 static void cloudauth_trace(enum trace_level level, uint64_t mask, const struct trace_source *src,
                             const struct ist where, const struct ist func,

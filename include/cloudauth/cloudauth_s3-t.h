@@ -1,5 +1,5 @@
 /*
- * include/haproxy/cloudauth_s3-t.h
+ * include/cloudauth/cloudauth_s3-t.h
  * Cloud storage authentication: Amazon S3 and compatible storages provider,
  * type definitions.
  *
@@ -11,8 +11,8 @@
  * version 2.1 of the License, or (at your option) any later version.
  */
 
-#ifndef _HAPROXY_CLOUDAUTH_S3_T_H
-#define _HAPROXY_CLOUDAUTH_S3_T_H
+#ifndef _CLOUDAUTH_S3_T_H
+#define _CLOUDAUTH_S3_T_H
 
 #include <import/ist.h>
 
@@ -99,4 +99,4 @@ struct cloudauth_s3_ctx {
 	char *role_session_name;        /* name of its sessions ("s3-role-session-name"), or NULL */
 };
 
-#endif /* _HAPROXY_CLOUDAUTH_S3_T_H */
+#endif /* _CLOUDAUTH_S3_T_H */

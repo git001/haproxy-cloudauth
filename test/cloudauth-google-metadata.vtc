@@ -1,6 +1,6 @@
 varnishtest "The cloudauth Google provider fetches the tokens from the metadata server"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_GOOGLE)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth provider: google '"
 feature ignore_unknown_macro
 
 # metadata server, the token expires quickly so that it must be refreshed
@@ -76,11 +76,11 @@ haproxy h1 -conf {
         use_backend be_scoped if { path_beg /scoped/ }
         default_backend be_metadata
     backend be_metadata
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s4_port} cloudauth metadata
+        filter-config cloudauth enabled profile metadata host localhost
+        server srv ipv4@localhost:${s4_port}
     backend be_scoped
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s5_port} cloudauth scoped
+        filter-config cloudauth enabled profile scoped host localhost
+        server srv ipv4@localhost:${s5_port}
 } -start
 
 # let the tokens be fetched

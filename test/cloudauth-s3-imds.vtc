@@ -1,6 +1,6 @@
 varnishtest "The cloudauth S3 provider fetches the access keys of the EC2 instances"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_S3)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth provider: s3 '"
 feature ignore_unknown_macro
 
 # the credentials of the role of the instance
@@ -79,8 +79,8 @@ haproxy h1 -conf {
         bind "fd@${fe}"
         default_backend be
     backend be
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s1_port} cloudauth instance
+        filter-config cloudauth enabled profile instance host localhost
+        server srv ipv4@localhost:${s1_port}
 } -start
 
 # let the access keys be fetched

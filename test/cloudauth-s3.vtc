@@ -1,6 +1,6 @@
 varnishtest "The cloudauth S3 provider signs the requests with the access keys"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_S3)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth provider: s3 '"
 feature ignore_unknown_macro
 
 # the access key of the AWS documentation, as "<access-key-id>:<secret>",
@@ -88,11 +88,11 @@ haproxy h1 -conf {
         use_backend be_parts if { path_beg /parts/ }
         default_backend be_s3
     backend be_s3
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${h2_s3_port} cloudauth s3
+        filter-config cloudauth enabled profile s3 host localhost
+        server srv ipv4@localhost:${h2_s3_port}
     backend be_parts
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${h2_s3_port} cloudauth parts
+        filter-config cloudauth enabled profile parts host localhost
+        server srv ipv4@localhost:${h2_s3_port}
 } -start
 
 client c1 -connect ${h1_fe_sock} {

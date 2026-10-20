@@ -1,6 +1,6 @@
 varnishtest "The cloudauth Google configuration errors are detected"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_GOOGLE)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth provider: google '"
 feature ignore_unknown_macro
 
 # credential files: valid, of another type, without e-mail address, with an
@@ -8,8 +8,8 @@ feature ignore_unknown_macro
 # workload identity federations: valid, with impersonation, without audience
 # and with an HTTP token endpoint
 shell {
-    key=$(sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/../ssl/certs/common.pem" | awk '{ printf "%s\\n", $0 }')
-    eckey=$(sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/../ssl/certs/ecdsa.pem" | awk '{ printf "%s\\n", $0 }')
+    key=$(sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/certs/common.pem" | awk '{ printf "%s\\n", $0 }')
+    eckey=$(sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/certs/ecdsa.pem" | awk '{ printf "%s\\n", $0 }')
     printf '{"type":"service_account","private_key":"%s","client_email":"sa@project.iam.gserviceaccount.com"}\n' "$key" > "${tmpdir}/sa.json"
     printf '{"type":"external_account","audience":"//iam.googleapis.com/projects/1"}\n' > "${tmpdir}/external.json"
     printf '{"type":"service_account","private_key":"%s"}\n' "$key" > "${tmpdir}/no-email.json"

@@ -1,6 +1,6 @@
 varnishtest "The cloudauth configuration errors are detected"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth filter.'"
 feature ignore_unknown_macro
 
 shell {
@@ -49,32 +49,82 @@ haproxy h5 -conf-BAD {unknown cloudauth profile 'nope'} {
     defaults
         mode http
     backend be
-        filter-config cloudauth enabled
-        server s1 localhost:80 cloudauth nope
+        filter-config cloudauth enabled profile nope host localhost
+        server s1 localhost:80
 }
 
-# the backend must have an enabled cloudauth filter
-haproxy h6 -conf-BAD {'cloudauth' requires an enabled cloudauth filter in backend 'be'} {
+# the client Host header is never used, so the host is mandatory, as well as
+# the profile
+haproxy h7 -conf-BAD {'filter-config cloudauth' : missing 'host <host>'} {
     global
         expose-experimental-directives
     defaults
         mode http
     backend be
-        filter-config cloudauth
-        server s1 localhost:80 cloudauth p1
+        filter-config cloudauth enabled profile p1
+        server s1 127.0.0.1:80
     cloudauth p1
         signer bearer
         token cli
 }
 
-# the client Host header is never used by default
-haproxy h7 -conf-BAD {'cloudauth' requires either a host name as server address or an explicit 'sni'} {
+haproxy h25 -conf-BAD {'filter-config cloudauth' : missing 'profile <name>'} {
     global
         expose-experimental-directives
     defaults
         mode http
     backend be
-        filter-config cloudauth enabled
+        filter-config cloudauth enabled host localhost
+        server s1 127.0.0.1:80
+}
+
+haproxy h26 -conf-BAD {'filter-config cloudauth' : 'host' expects a host name} {
+    global
+        expose-experimental-directives
+    defaults
+        mode http
+    backend be
+        filter-config cloudauth enabled profile p1 host a/b
+        server s1 127.0.0.1:80
+    cloudauth p1
+        signer bearer
+        token cli
+}
+
+haproxy h27 -conf-BAD {'filter-config cloudauth' : unknown keyword 'sni'} {
+    global
+        expose-experimental-directives
+    defaults
+        mode http
+    backend be
+        filter-config cloudauth enabled profile p1 host localhost sni localhost
+        server s1 127.0.0.1:80
+    cloudauth p1
+        signer bearer
+        token cli
+}
+
+# the filter is only used in backends
+haproxy h28 -conf-BAD {proxy 'fe' : the cloudauth filter may only be used in a backend} {
+    global
+        expose-experimental-directives
+    defaults
+        mode http
+    frontend fe
+        bind "fd@${fe28}"
+        filter-config cloudauth enabled profile p1 host localhost
+    cloudauth p1
+        signer bearer
+        token cli
+}
+
+# the server keyword of the former versions is not supported anymore
+haproxy h29 -conf-BAD {'server be/s1' : unknown keyword 'cloudauth'} {
+    global
+        expose-experimental-directives
+    defaults
+        mode http
+    backend be
         server s1 127.0.0.1:80 cloudauth p1
     cloudauth p1
         signer bearer
@@ -168,8 +218,8 @@ haproxy h14 -conf {
         bind "fd@${fe}"
         default_backend be
     backend be
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s1_port} cloudauth p1
+        filter-config cloudauth enabled profile p1 host localhost
+        server srv ipv4@localhost:${s1_port}
 } -start
 
 client c1 -connect ${h14_fe_sock} {

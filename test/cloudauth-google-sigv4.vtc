@@ -1,6 +1,6 @@
 varnishtest "The cloudauth Google provider signs the requests with the HMAC keys"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_GOOGLE)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth provider: google '"
 feature ignore_unknown_macro
 
 # the HMAC keys, as "<access-key-id>:<secret>"
@@ -67,11 +67,11 @@ haproxy h1 -conf {
         use_backend be_regional if { path_beg /regional/ }
         default_backend be_hmac
     backend be_hmac
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${h2_gcs_port} cloudauth hmac
+        filter-config cloudauth enabled profile hmac host localhost
+        server srv ipv4@localhost:${h2_gcs_port}
     backend be_regional
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${h2_gcs_port} cloudauth regional
+        filter-config cloudauth enabled profile regional host localhost
+        server srv ipv4@localhost:${h2_gcs_port}
 } -start
 
 client c1 -connect ${h1_fe_sock} {

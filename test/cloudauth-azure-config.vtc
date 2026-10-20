@@ -1,6 +1,6 @@
 varnishtest "The cloudauth Azure configuration errors are detected"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_AZURE)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth provider: azure '"
 feature ignore_unknown_macro
 
 setenv CLOUDAUTH_AZ_BADKEY "not!base64"
@@ -9,11 +9,11 @@ setenv CLOUDAUTH_AZ_SECRET "client-secret"
 
 # a certificate with the private key of another one, and a private key alone
 shell {
-    sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' "${testdir}/../ssl/certs/common.pem" > "${tmpdir}/mismatch.pem"
-    sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/../ssl/certs/cert1-example.com.pem.rsa" >> "${tmpdir}/mismatch.pem"
-    sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/../ssl/certs/common.pem" > "${tmpdir}/key-only.pem"
-    cp "${testdir}/../ssl/certs/common.pem" "${tmpdir}/app.pem"
-    cp "${testdir}/../ssl/certs/ecdsa.pem" "${tmpdir}/ecdsa.pem"
+    sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' "${testdir}/certs/common.pem" > "${tmpdir}/mismatch.pem"
+    sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/certs/cert1-example.com.pem.rsa" >> "${tmpdir}/mismatch.pem"
+    sed -n '/BEGIN.*PRIVATE KEY/,/END.*PRIVATE KEY/p' "${testdir}/certs/common.pem" > "${tmpdir}/key-only.pem"
+    cp "${testdir}/certs/common.pem" "${tmpdir}/app.pem"
+    cp "${testdir}/certs/ecdsa.pem" "${tmpdir}/ecdsa.pem"
     cp "${testdir}/cloudauth-azure-cert-enc.pem" "${tmpdir}/app-enc.pem"
     printf 'wrong-password\n' > "${tmpdir}/wrong-password"
     chmod 600 "${tmpdir}/mismatch.pem" "${tmpdir}/key-only.pem" "${tmpdir}/app.pem" "${tmpdir}/ecdsa.pem" \

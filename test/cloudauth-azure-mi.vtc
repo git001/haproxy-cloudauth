@@ -1,6 +1,6 @@
 varnishtest "The cloudauth Azure provider fetches the tokens of the managed identities"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_AZURE)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth provider: azure '"
 feature ignore_unknown_macro
 
 # App Service endpoint, announced by IDENTITY_ENDPOINT and IDENTITY_HEADER
@@ -94,11 +94,11 @@ haproxy h1 -conf {
         use_backend be_imds if { path_beg /imds/ }
         default_backend be_app
     backend be_app
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s4_port} cloudauth app-service
+        filter-config cloudauth enabled profile app-service host localhost
+        server srv ipv4@localhost:${s4_port}
     backend be_imds
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s5_port} cloudauth imds
+        filter-config cloudauth enabled profile imds host localhost
+        server srv ipv4@localhost:${s5_port}
 } -start
 
 # let the tokens be fetched

@@ -1,6 +1,6 @@
 varnishtest "The cloudauth secrets are removed from the environment"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth filter.'"
 feature ignore_unknown_macro
 
 setenv CLOUDAUTH_ENV_TOKEN env-token
@@ -29,8 +29,8 @@ haproxy h1 -conf {
         http-request return status 200 content-type text/plain lf-string "env=%[env(CLOUDAUTH_ENV_TOKEN)]" if { path /env }
         default_backend be
     backend be
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s1_port} cloudauth p1
+        filter-config cloudauth enabled profile p1 host localhost
+        server srv ipv4@localhost:${s1_port}
 } -start
 
 client c1 -connect ${h1_fe_sock} {

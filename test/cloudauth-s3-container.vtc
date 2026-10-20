@@ -1,6 +1,6 @@
 varnishtest "The cloudauth S3 provider fetches the access keys of the containers"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_S3)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth provider: s3 '"
 feature ignore_unknown_macro
 
 # the credentials of the containers, the first ones expiring in 4 seconds,
@@ -122,11 +122,11 @@ haproxy h1 -conf {
         use_backend be_pod if { path_beg /pod/ }
         default_backend be_container
     backend be_container
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s5_port} cloudauth container
+        filter-config cloudauth enabled profile container host localhost
+        server srv ipv4@localhost:${s5_port}
     backend be_pod
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s6_port} cloudauth pod
+        filter-config cloudauth enabled profile pod host localhost
+        server srv ipv4@localhost:${s6_port}
 } -start
 
 # let the access keys be fetched

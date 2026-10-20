@@ -1,6 +1,6 @@
-varnishtest "The cloudauth filter authenticates the request for its final server, also on retries"
+varnishtest "The requests authenticated by the cloudauth filter remain so on retries"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth filter.'"
 feature ignore_unknown_macro
 
 setenv CLOUDAUTH_TOKEN_A token-a
@@ -18,11 +18,12 @@ server s0 {
     txresp -body "plain"
 } -start
 
-# L7 retry: the request must be authenticated again for the second server
+# L7 retry: the request is authenticated once, before the first server is
+# chosen, and is sent as is to the second server
 server s1 {
     rxreq
     expect req.url == "/l7"
-    expect req.http.authorization == "Bearer token-a"
+    expect req.http.authorization == "Bearer token-b"
     txresp -status 503 -body "retry me"
     barrier b_retry sync
 } -start
@@ -67,23 +68,23 @@ haproxy h1 -conf {
         default_backend be_plain
     backend be_plain
         http-request set-path /bucket-a%[path]
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s0_port} cloudauth tok-a
+        filter-config cloudauth enabled profile tok-a host localhost
+        server srv ipv4@localhost:${s0_port}
     backend be_l7
         balance first
         retries 1
         retry-on 503
         option redispatch
-        filter-config cloudauth enabled
-        server bad ipv4@localhost:${s1_port} cloudauth tok-a
-        server good ipv4@localhost:${s2_port} cloudauth tok-b
+        filter-config cloudauth enabled profile tok-b host localhost
+        server bad ipv4@localhost:${s1_port}
+        server good ipv4@localhost:${s2_port}
     backend be_conn
         balance first
         retries 1
         option redispatch
-        filter-config cloudauth enabled
-        server dead ipv4@localhost:1 cloudauth tok-a
-        server alive ipv4@localhost:${s3_port} cloudauth tok-b
+        filter-config cloudauth enabled profile tok-b host localhost
+        server dead ipv4@localhost:1
+        server alive ipv4@localhost:${s3_port}
 } -start
 
 client c1 -connect ${h1_fe_sock} {

@@ -1,6 +1,6 @@
 varnishtest "The cloudauth Google provider fetches the tokens of the workload identities"
 
-feature cmd "$HAPROXY_PROGRAM -cc 'feature(CLOUDAUTH_GOOGLE)'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth provider: google '"
 feature ignore_unknown_macro
 
 # federated token (JWT) expiring on 2100-01-01
@@ -62,7 +62,7 @@ haproxy h2 -conf {
         timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
         timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
     frontend sts
-        bind "fd@${sts}" ssl crt ${testdir}/../ssl/certs/common.pem
+        bind "fd@${sts}" ssl crt ${testdir}/certs/common.pem
         use_backend be_late if { path /late }
         use_backend be_denied if { path /denied }
         default_backend be_sts
@@ -121,11 +121,11 @@ haproxy h1 -conf {
         use_backend be_late if { path_beg /late/ }
         default_backend be_wi
     backend be_wi
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s4_port} cloudauth wi
+        filter-config cloudauth enabled profile wi host localhost
+        server srv ipv4@localhost:${s4_port}
     backend be_late
-        filter-config cloudauth enabled
-        server srv ipv4@localhost:${s5_port} cloudauth late
+        filter-config cloudauth enabled profile late host localhost
+        server srv ipv4@localhost:${s5_port}
 } -start
 
 # let the tokens be fetched

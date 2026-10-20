@@ -1,0 +1,46 @@
+varnishtest "The Prometheus exporter reports the state of the cloudauth profiles"
+
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the cloudauth filter.'"
+feature cmd "$HAPROXY_PROGRAM -vv | grep -qF 'Built with the Prometheus exporter as a service'"
+feature ignore_unknown_macro
+
+# a static token, and a JWT expiring in 2100
+setenv CLOUDAUTH_STATIC static-token
+setenv CLOUDAUTH_JWT eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.c2ln
+
+haproxy h1 -conf {
+    global
+        nbthread 1
+        expose-experimental-directives
+    defaults
+        mode http
+        timeout connect "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout client "${HAPROXY_TEST_TIMEOUT-5s}"
+        timeout server "${HAPROXY_TEST_TIMEOUT-5s}"
+    cloudauth static
+        signer bearer
+        token env:CLOUDAUTH_STATIC
+    cloudauth missing
+        signer bearer
+        token cli
+    cloudauth jwt
+        signer bearer
+        token env:CLOUDAUTH_JWT
+    frontend fe
+        bind "fd@${fe}"
+        http-request use-service prometheus-exporter
+} -start
+
+# The metrics are reported without any request using the profiles. Only the
+# credentials which expire have a remaining validity.
+client c1 -connect ${h1_fe_sock} {
+    txreq -url "/metrics?scope=cloudauth"
+    rxresp
+    expect resp.status == 200
+    expect resp.body ~ "haproxy_cloudauth_credential_valid\\{profile=\"static\"\\} 1\n"
+    expect resp.body ~ "haproxy_cloudauth_credential_valid\\{profile=\"missing\"\\} 0\n"
+    expect resp.body ~ "haproxy_cloudauth_credential_valid\\{profile=\"jwt\"\\} 1\n"
+    expect resp.body ~ "haproxy_cloudauth_credential_expires_in_seconds\\{profile=\"jwt\"\\} [0-9]{10}\n"
+    expect resp.body !~ "haproxy_cloudauth_credential_expires_in_seconds\\{profile=\"(static|missing)\"\\}"
+    expect resp.body ~ "haproxy_cloudauth_credential_fetch_failed\\{profile=\"static\"\\} 0\n"
+} -run

@@ -195,7 +195,7 @@ The backends count the authenticated requests (`cloudauth_req_signed`) and the
 requests which could not be authenticated (`cloudauth_req_failed`). These
 counters are reported by the `show stat` CLI command and by the Prometheus
 exporter with its `extra-counters` parameter. The state of the profiles is
-reported by sample fetches (see section 4).
+reported by sample fetches and by the Prometheus exporter too (see section 4).
 
 The request is authenticated before it is queued, when the servers are full.
 The signatures of the storages are valid for a few minutes (15 minutes for
@@ -1179,3 +1179,19 @@ cloudauth.fetch_failed([<profile>]) : boolean
 Returns true if the last fetch of the credential of the profile failed, the
 reason being reported by `show cloudauth`. It is always false for the
 credentials which are not fetched by HAProxy.
+
+### Prometheus metrics
+
+When HAProxy is built with its Prometheus exporter (`USE_PROMEX=1`), the
+exporter reports the state of each profile at every scrape, even when no
+request uses it, in the `cloudauth` scope (`/metrics?scope=cloudauth`), with a
+`profile` label:
+
+- `haproxy_cloudauth_credential_valid`: 1 if the credential is valid,
+    otherwise 0;
+
+- `haproxy_cloudauth_credential_expires_in_seconds`: the remaining validity of
+    the credential, only reported for the credentials which expire;
+
+- `haproxy_cloudauth_credential_fetch_failed`: 1 if the last fetch of the
+    credential failed, otherwise 0.

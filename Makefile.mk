@@ -53,6 +53,11 @@ endif
 # assembled.
 OPTIONS_CFLAGS += -I$(CLOUDAUTH_DIR)/include
 
+# Report the providers in the "OPTIONS" line of "haproxy -vv", like the build
+# options of HAProxy. BUILD_OPTIONS is set before this fragment is included,
+# and only used after.
+BUILD_OPTIONS += CLOUDAUTH_AZURE=$(CLOUDAUTH_AZURE) CLOUDAUTH_GOOGLE=$(CLOUDAUTH_GOOGLE) CLOUDAUTH_S3=$(CLOUDAUTH_S3)
+
 # Extend the "clean" target of HAProxy. A rule without a recipe only adds
 # prerequisites. This fragment is included before the first target of HAProxy
 # ("all"), so the default goal is reset after the rules below to let "all"

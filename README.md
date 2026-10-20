@@ -97,6 +97,24 @@ built in. The unit tests are run too when HAProxy was built with
 HAPROXY_DIR=/path/to/haproxy VTEST_PROGRAM=/path/to/vtest test/run.sh
 ```
 
+### Container image
+
+The `Containerfile` builds HAProxy with the filter and with the
+[OpenTelemetry filter](https://github.com/haproxytech/haproxy-opentelemetry),
+runs the tests, and provides a runtime image based on Debian. It follows the
+layout of the HAProxy images: AWS-LC as SSL library, QUIC, the Prometheus
+exporter and Lua. The first build takes long, since it builds the OpenTelemetry
+C++ SDK, whose compiler jobs need a lot of memory, so their number is limited
+by `JOBS` (4 by default):
+
+```
+podman build --build-arg JOBS=6 --memory 14g -t haproxy-cloudauth .
+podman build --target test .
+```
+
+The HAProxy and OpenTelemetry filter versions are set with the `HAPROXY_REF`
+and `OTEL_FILTER_REF` build arguments, see the `Containerfile` for the others.
+
 ### License
 
 The license model of HAProxy applies: GPL-2.0-or-later for the files in

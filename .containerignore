@@ -1,0 +1,4 @@
+# Not needed by the image build (see Containerfile).
+.git
+build
+**/*.o

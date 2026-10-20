@@ -37,8 +37,8 @@ Built with the cloudauth provider: azure (Azure Blob Storage).
 The events affecting the credentials are reported once, when they happen, to
 the global loggers: a credential updated from the CLI (notice) and a credential
 which expired (warning). The profiles without valid credential are also
-reported on startup. The state of the profiles may be inspected with the `show
-cloudauth` CLI command (see `doc/management.md`).
+reported on startup. The state of the profiles may be inspected with the
+`show cloudauth` CLI command (see `doc/management.md`).
 
 The processing may also be followed with the `cloudauth` trace source (see
 `trace` in the management guide of HAProxy, and the `traces` section): the
@@ -254,9 +254,9 @@ azure-authority-host <url>
 ```
 
 Sets the URL of the Microsoft Entra ID authority host to which the client
-secret, the federated token or the client assertion is sent with `token
-client-secret`, `token workload-identity` or `token client-certificate`, such
-as `AZURE_AUTHORITY_HOST`, instead of the default one
+secret, the federated token or the client assertion is sent with
+`token client-secret`, `token workload-identity` or `token client-certificate`,
+such as `AZURE_AUTHORITY_HOST`, instead of the default one
 `https://login.microsoftonline.com` of the Azure public cloud, for instance
 `https://login.microsoftonline.us` for Azure Government. Only HTTPS is
 accepted, and `<url>` is made of the scheme, the host and an optional port. It
@@ -282,18 +282,18 @@ mandatory with the other token sources. It requires `provider azure` first.
 azure-client-certificate env:<variable> | file:<path>
 ```
 
-Sets the certificate of the application whose tokens are fetched with `token
-client-certificate`, and its private key, in PEM format, such as the file
-designated by `AZURE_CLIENT_CERTIFICATE_PATH`. It is mandatory with this token
-source. The private key must be an RSA key matching the certificate. If it is
-encrypted, its password must be set with `azure-client-certificate-password`.
-Like the token (see `token`), it is never accepted in the configuration: it is
-read when the configuration is parsed, either from the environment variable
-`<variable>`, which is then removed from the environment, or from the file
-`<path>`. Only the private key and the SHA-256 thumbprint of the certificate
-are kept once the section is parsed, and the private key is never logged nor
-reported. A certificate renewed in the file requires a reload. It requires
-`provider azure` first.
+Sets the certificate of the application whose tokens are fetched with
+`token client-certificate`, and its private key, in PEM format, such as the
+file designated by `AZURE_CLIENT_CERTIFICATE_PATH`. It is mandatory with this
+token source. The private key must be an RSA key matching the certificate. If
+it is encrypted, its password must be set with
+`azure-client-certificate-password`. Like the token (see `token`), it is never
+accepted in the configuration: it is read when the configuration is parsed,
+either from the environment variable `<variable>`, which is then removed from
+the environment, or from the file `<path>`. Only the private key and the
+SHA-256 thumbprint of the certificate are kept once the section is parsed, and
+the private key is never logged nor reported. A certificate renewed in the file
+requires a reload. It requires `provider azure` first.
 
 ### azure-client-certificate-password
 
@@ -308,8 +308,8 @@ the configuration is parsed, either from the environment variable `<variable>`,
 which is then removed from the environment, or from the file `<path>`, whose
 trailing spaces and line feeds are ignored. It is wiped once the private key is
 decrypted. `no-password` explicitly declares that the private key is not
-encrypted, which is also the case without this keyword. It requires `provider
-azure` first.
+encrypted, which is also the case without this keyword. It requires
+`provider azure` first.
 
 ### azure-client-secret
 
@@ -317,9 +317,9 @@ azure` first.
 azure-client-secret env:<variable> | file:<path>
 ```
 
-Sets the client secret of the application whose tokens are fetched with `token
-client-secret`. It is mandatory with this token source. Like the token (see
-`token`), it is never accepted in the configuration: it is read when the
+Sets the client secret of the application whose tokens are fetched with
+`token client-secret`. It is mandatory with this token source. Like the token
+(see `token`), it is never accepted in the configuration: it is read when the
 configuration is parsed, either from the environment variable `<variable>`,
 such as `AZURE_CLIENT_SECRET`, which is then removed from the environment, or
 from the file `<path>`, whose trailing spaces and line feeds are ignored. It is
@@ -332,8 +332,8 @@ azure-tenant-id <id> | env:<variable>
 ```
 
 Sets the Microsoft Entra ID tenant of the application whose tokens are fetched
-with `token client-secret`, `token workload-identity` or `token
-client-certificate`, as a GUID or a domain name such as
+with `token client-secret`, `token workload-identity` or
+`token client-certificate`, as a GUID or a domain name such as
 `contoso.onmicrosoft.com`. It may be read from the environment variable
 `<variable>` when the configuration is parsed, such as `AZURE_TENANT_ID`. It is
 mandatory with these token sources. It requires `provider azure` first.
@@ -401,17 +401,18 @@ google-credentials env:<variable> | file:<path>
 
 Loads the Google Cloud credential file, in JSON, of a service account, as
 downloaded from Google Cloud, used by `token service-account`, or of a workload
-identity federation (`external_account`), as generated by `gcloud iam
-workload-identity-pools create-cred-config`, used by `token workload-identity`.
-Like the token (see `token`), it is never accepted in the configuration: it is
-read from the environment variable `<variable>`, which is then removed from the
-environment, or from the file `<path>`, usually the one named by
-`GOOGLE_APPLICATION_CREDENTIALS`, when the configuration is parsed. Only the
-e-mail address of the service account, the identifier and the private key of
-its key, and its token endpoint are kept, the private key never being logged
-nor reported, or the workload identity pool provider, the type of the federated
-token and the Security Token Service endpoint. Since the file is never read
-again, a new key requires a reload. It requires `provider google` first.
+identity federation (`external_account`), as generated by
+`gcloud iam workload-identity-pools create-cred-config`, used by
+`token workload-identity`. Like the token (see `token`), it is never accepted
+in the configuration: it is read from the environment variable `<variable>`,
+which is then removed from the environment, or from the file `<path>`, usually
+the one named by `GOOGLE_APPLICATION_CREDENTIALS`, when the configuration is
+parsed. Only the e-mail address of the service account, the identifier and the
+private key of its key, and its token endpoint are kept, the private key never
+being logged nor reported, or the workload identity pool provider, the type of
+the federated token and the Security Token Service endpoint. Since the file is
+never read again, a new key requires a reload. It requires `provider google`
+first.
 
 ### input
 
@@ -419,10 +420,10 @@ again, a new key requires a reload. It requires `provider google` first.
 input <name> env:<variable> | file:<path>
 ```
 
-Loads the input `<name>` of the token source of the profile (see `token
-<source>`), which must be set first, when the configuration is parsed. The
-inputs are secrets that HAProxy exchanges for a token, such as the token of a
-Kubernetes service account with `token workload-identity`, so they are never
+Loads the input `<name>` of the token source of the profile (see
+`token <source>`), which must be set first, when the configuration is parsed.
+The inputs are secrets that HAProxy exchanges for a token, such as the token of
+a Kubernetes service account with `token workload-identity`, so they are never
 accepted in the configuration: they are read from the environment variable
 `<variable>`, which is then removed from the environment, or from the file
 `<path>`, whose trailing spaces and line feeds are ignored. Since the file is
@@ -448,8 +449,9 @@ on the build options (see above):
     sent with all the signers (see `azure-version`). The supported signers are
     `bearer` with a Microsoft Entra ID access token, `sas` and `sharedkey`. The
     tokens of the managed identities, of the applications and of the workload
-    identities may be fetched by HAProxy (see `token managed-identity`, `token
-    client-secret`, `token client-certificate` and `token workload-identity`).
+    identities may be fetched by HAProxy (see `token managed-identity`,
+    `token client-secret`, `token client-certificate` and
+    `token workload-identity`).
 
 - `google`: Google Cloud Storage. The supported signers are `bearer` with an
     OAuth 2.0 access token, which may be fetched by HAProxy from the metadata
@@ -462,8 +464,9 @@ on the build options (see above):
     supported signer is `sigv4` with an access key, permanent or temporary with
     its session token. The region is mandatory (see `region`). The temporary
     access keys of the containers, of the workload identities and of the EC2
-    instances may be fetched by HAProxy (see `token container`, `token
-    pod-identity`, `token workload-identity` and `token instance-metadata`).
+    instances may be fetched by HAProxy (see `token container`,
+    `token pod-identity`, `token workload-identity` and
+    `token instance-metadata`).
 
 ### region
 
@@ -546,15 +549,14 @@ supported types are:
     `x-amz-content-sha256` with `provider s3`, `x-goog-date` and
     `x-goog-content-sha256` with `provider google`), the session token in its
     own header (`x-amz-security-token`), then the Authorization header,
-    `<algorithm> Credential=<access-key-id>/<scope>, SignedHeaders=<headers>,
-    Signature=<signature>`, the signature covering the method, the path and the
-    query string of the request, which are encoded again as expected by the
-    signature, the Host header and the added headers, within the credential
-    scope made of the day, the region (see `region`) and the service. The
-    payload is not signed (`UNSIGNED-PAYLOAD`), since the request is signed
-    before its payload is forwarded, so it should be protected by TLS. The
-    access key identifier is not a secret, but the token is, like any other
-    one.
+    `<algorithm> Credential=<access-key-id>/<scope>, SignedHeaders=<headers>, Signature=<signature>`,
+    the signature covering the method, the path and the query string of the
+    request, which are encoded again as expected by the signature, the Host
+    header and the added headers, within the credential scope made of the day,
+    the region (see `region`) and the service. The payload is not signed
+    (`UNSIGNED-PAYLOAD`), since the request is signed before its payload is
+    forwarded, so it should be protected by TLS. The access key identifier is
+    not a secret, but the token is, like any other one.
 
 ### token
 
@@ -592,8 +594,9 @@ For security reasons, the token itself is never accepted in the configuration.
     are logged. The requests are sent with the internal HTTP client, whose TLS
     settings, retries and connection timeout are those of the `httpclient.*`
     global keywords (see also `fetch-timeout`). The token cannot be injected
-    from the CLI, but it may be fetched at once with `update cloudauth
-    credential` (see `doc/management.md`). The supported sources are:
+    from the CLI, but it may be fetched at once with
+    `update cloudauth credential` (see `doc/management.md`). The supported
+    sources are:
 
     - `managed-identity`: with `provider azure`, the Microsoft Entra ID token
         of the managed identity of the host, for the storage. It is fetched
@@ -752,8 +755,9 @@ them internally with colons into the token `<access-key-id>:<secret>` or
 `<access-key-id>:<secret>:<session-token>`, which is then checked and used
 exactly like a token read at once. So a part must not contain a colon, and a
 token injected from the CLI to replace it must be given in the joined form. The
-variables are removed from the environment like the other ones, and `show
-cloudauth` reports all the parts as the source of the token. For instance:
+variables are removed from the environment like the other ones, and
+`show cloudauth` reports all the parts as the source of the token. For
+instance:
 
 ```
 token env:AWS_ACCESS_KEY_ID env:AWS_SECRET_ACCESS_KEY env:AWS_SESSION_TOKEN
@@ -982,5 +986,5 @@ Sets the OAuth 2.0 scopes of the tokens requested from the token source (see
 the permissions needed to read the storage. Each scope is made of visible ASCII
 characters except the double quote and the backslash, and the scopes are at
 most 1024 characters long, including the spaces between them. The token sources
-which do not support them reject it, see each token source. It requires `token
-<source>`.
+which do not support them reject it, see each token source. It requires
+`token <source>`.

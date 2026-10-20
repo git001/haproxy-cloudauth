@@ -38,10 +38,10 @@ removed, the Host header is set to the host of the filter, then the request is
 signed by the provider, or with the bearer token without provider. The
 signature is computed last since it may cover the other headers.
 
-A profile selects a provider with `provider <name>`, a signer with `signer
-<type>` among the generic types `bearer`, `sas`, `sharedkey` and `sigv4`, and
-where the token comes from with `token <source>`. Without provider, only the
-bearer signer is accepted.
+A profile selects a provider with `provider <name>`, a signer with
+`signer <type>` among the generic types `bearer`, `sas`, `sharedkey` and
+`sigv4`, and where the token comes from with `token <source>`. Without
+provider, only the bearer signer is accepted.
 
 ## 2. Secrets
 
@@ -135,17 +135,17 @@ use their provider, so that the provider must be set first.
 ## 4. Token sources
 
 A token source is a place from which HAProxy fetches the credential of a
-profile, then refreshes it. It is declared by a provider in a table of `struct
-cloudauth_source`, and selected with `token <source>`, once the provider is
-set. The profile then has the `CLOUDAUTH_SRC_FETCH` source, and `prof->fetch`
-holds the state of the fetching.
+profile, then refreshes it. It is declared by a provider in a table of
+`struct cloudauth_source`, and selected with `token <source>`, once the
+provider is set. The profile then has the `CLOUDAUTH_SRC_FETCH` source, and
+`prof->fetch` holds the state of the fetching.
 
 The fields of `struct cloudauth_source` are:
 
 - name: the name used by the `token` keyword;
 
-- signers: the signers using the tokens of the source, as `(1 <<
-    CLOUDAUTH_SIGNER_*)`;
+- signers: the signers using the tokens of the source, as
+    `(1 << CLOUDAUTH_SIGNER_*)`;
 
 - inputs: the names of the inputs of the source, terminated by NULL, at most
     `CLOUDAUTH_MAX_INPUTS`, or NULL if it has none. An input is a secret
@@ -339,8 +339,8 @@ of the provider. The core then signs the requests with `cloudauth_sigv4_sign()`
 instead of calling the `sign()` callback, checks the tokens against the
 variant, and requires `region` if the variant has no default one. The signer
 reports the reason of its failures, and traces the scope, the signed headers
-and the hash of the canonical request of each request. The fields of `struct
-cloudauth_sigv4` are:
+and the hash of the canonical request of each request. The fields of
+`struct cloudauth_sigv4` are:
 
 - algorithm: the name of the algorithm, such as `AWS4-HMAC-SHA256` or
     `GOOG4-HMAC-SHA256`;

@@ -197,8 +197,12 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # The jobs depending on the packages also run when some of them failed: the
+  # installation of a failed package fails alone, and the image only needs the
+  # Debian 13 build. The workflow still fails.
   install:
     needs: packages
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -228,6 +232,7 @@ jobs:
 
   image:
     needs: packages
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     strategy:

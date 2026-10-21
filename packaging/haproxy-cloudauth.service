@@ -1,0 +1,59 @@
+# The unit of HAProxy (admin/systemd/haproxy.service.in), for the HAProxy of
+# the haproxy-cloudauth package, which runs as an unprivileged user with the
+# sandboxing options of systemd enabled. The options unknown to the systemd of
+# older distributions (RHEL 8) are ignored with a warning.
+#
+# Secrets used with "env:" in the configuration are set in the environment
+# file, which must only be readable by root:
+#
+#   /etc/default/haproxy-cloudauth     (Debian, Ubuntu)
+#   /etc/sysconfig/haproxy-cloudauth   (RHEL)
+
+[Unit]
+Description=HAProxy with the cloudauth filter
+Documentation=https://github.com/git001/haproxy-cloudauth
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=-/etc/default/haproxy-cloudauth
+EnvironmentFile=-/etc/sysconfig/haproxy-cloudauth
+Environment="CONFIG=/etc/haproxy-cloudauth/haproxy-cloudauth.cfg" "PIDFILE=/run/haproxy-cloudauth/haproxy.pid" "CFGDIR=/etc/haproxy-cloudauth/conf.d" "EXTRAOPTS=-S /run/haproxy-cloudauth/master.sock"
+ExecStart=/usr/sbin/haproxy-cloudauth -Ws -f $CONFIG -f $CFGDIR -p $PIDFILE $EXTRAOPTS
+ExecReload=/usr/sbin/haproxy-cloudauth -Ws -f $CONFIG -f $CFGDIR -c $EXTRAOPTS
+ExecReload=/bin/kill -USR2 $MAINPID
+KillMode=mixed
+Restart=always
+SuccessExitStatus=143
+Type=notify
+
+User=haproxy-cloudauth
+Group=haproxy-cloudauth
+RuntimeDirectory=haproxy-cloudauth
+StateDirectory=haproxy-cloudauth
+
+# Only the ports below 1024 need a privilege
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+LockPersonality=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

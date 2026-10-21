@@ -7,10 +7,12 @@
 #   podman build --target test .                         # build and test only
 #   podman build --build-arg HAPROXY_REF=v3.4.0 ...      # another HAProxy
 #
-# The build and test stages also run on the other supported distributions
-# (see ci/install-builddeps.sh), the runtime image only on Debian:
+# The build, test and package stages also run on the other supported
+# distributions (see ci/install-builddeps.sh), the runtime image only on Debian:
 #
 #   podman build --target test --build-arg BASE_IMAGE=almalinux:8 .
+#   podman build --target packages --build-arg BASE_IMAGE=almalinux:8 \
+#       --output type=local,dest=dist .
 #
 # The C++ SDK needs 1 to 2 GB of memory per compiler job, so the number of
 # jobs is limited by JOBS (4 by default), whatever the number of CPUs. The
@@ -28,6 +30,8 @@
 #             ci/ scripts it runs, so it should be cached.
 #   build   : HAProxy with both filters, and vtest (ci/build-haproxy.sh).
 #   test    : the regression and unit tests of the cloudauth filter.
+#   package : the RPM or DEB package of the distribution (ci/package.sh), and
+#             its SBOM, exported by the "packages" stage.
 #   runtime : HAProxy and the shared libraries of PREFIX only.
 #
 # AWS-LC is the version of the HAProxy images, instead of the FIPS one of the
@@ -68,6 +72,24 @@ ARG JOBS=4
 
 RUN cd /usr/src/haproxy-cloudauth \
  && HAPROXY_DIR=/usr/src/haproxy VTEST_PROGRAM=/usr/local/bin/vtest test/run.sh --j "${JOBS}"
+
+
+FROM build AS package
+
+ARG PREFIX=/opt/haproxy-cloudauth
+ARG PKG_VERSION=0.0.0~dev
+ARG PKG_RELEASE=1
+ARG CLOUDAUTH_COMMIT=
+ARG SOURCE_DATE_EPOCH
+
+RUN PREFIX="${PREFIX}" OUTDIR=/out PKG_VERSION="${PKG_VERSION}" PKG_RELEASE="${PKG_RELEASE}" \
+    CLOUDAUTH_COMMIT="${CLOUDAUTH_COMMIT}" SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+    sh /usr/src/haproxy-cloudauth/ci/package.sh
+
+
+# The package and its SBOM only, for "--output type=local,dest=<dir>"
+FROM scratch AS packages
+COPY --from=package /out/ /
 
 
 FROM ${RUNTIME_IMAGE} AS runtime

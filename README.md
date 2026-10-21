@@ -97,23 +97,35 @@ built in. The unit tests are run too when HAProxy was built with
 HAPROXY_DIR=/path/to/haproxy VTEST_PROGRAM=/path/to/vtest test/run.sh
 ```
 
-### Container image
+### Packages and container images
 
-The `Containerfile` builds HAProxy with the filter and with the
+The releases provide, for amd64:
+
+- RPM packages for RHEL 8, 9 and 10 (and the compatible distributions), and
+  DEB packages for Debian 12 and 13 and Ubuntu 22.04, 24.04 and 26.04;
+- the container image `ghcr.io/git001/haproxy-cloudauth`, based on Debian,
+  and the same image with bash and curl, tagged with `-debug`, to debug from
+  inside a pod;
+- the PDF manuals.
+
+HAProxy is built with the filter and with the
 [OpenTelemetry filter](https://github.com/haproxytech/haproxy-opentelemetry),
-runs the tests, and provides a runtime image based on Debian. It follows the
-layout of the HAProxy images: AWS-LC as SSL library, QUIC, the Prometheus
-exporter and Lua. The first build takes long, since it builds the OpenTelemetry
-C++ SDK, whose compiler jobs need a lot of memory, so their number is limited
-by `JOBS` (4 by default):
+like the HAProxy images: AWS-LC as SSL library, QUIC, the Prometheus exporter
+and Lua. The packages ship their own AWS-LC, curl and OpenTelemetry libraries
+in `/opt/haproxy-cloudauth/lib`, and are installed next to the HAProxy of the
+distribution:
 
 ```
-podman build --build-arg JOBS=6 --memory 14g -t haproxy-cloudauth .
-podman build --target test .
+dnf install ./haproxy-cloudauth-<version>-1.el9.x86_64.rpm
+apt install ./haproxy-cloudauth_<version>-1~deb13_amd64.deb
 ```
 
-The HAProxy and OpenTelemetry filter versions are set with the `HAPROXY_REF`
-and `OTEL_FILTER_REF` build arguments, see the `Containerfile` for the others.
+HAProxy is then `/usr/sbin/haproxy-cloudauth`, its configuration
+`/etc/haproxy-cloudauth/haproxy-cloudauth.cfg`, and the service
+`haproxy-cloudauth.service`, which runs as an unprivileged user and is neither
+enabled nor started on installation. The secrets referenced with `env:` are
+set in `/etc/sysconfig/haproxy-cloudauth` (RPM) or
+`/etc/default/haproxy-cloudauth` (DEB).
 
 The image is used like the official HAProxy images: it runs HAProxy in
 master-worker mode with `/usr/local/etc/haproxy/haproxy.cfg`, and the arguments
@@ -121,11 +133,40 @@ which are only options are passed to HAProxy:
 
 ```
 podman run --rm -v ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro \
-    -e CLOUDAUTH_TOKEN haproxy-cloudauth
-podman run --rm haproxy-cloudauth -vv
-podman run --rm -v ./haproxy.cfg:/tmp/haproxy.cfg:ro haproxy-cloudauth \
-    -c -f /tmp/haproxy.cfg
+    -e CLOUDAUTH_TOKEN ghcr.io/git001/haproxy-cloudauth
+podman run --rm ghcr.io/git001/haproxy-cloudauth -vv
+podman run --rm -v ./haproxy.cfg:/tmp/haproxy.cfg:ro \
+    ghcr.io/git001/haproxy-cloudauth -c -f /tmp/haproxy.cfg
 ```
+
+It runs with the default security settings of Kubernetes and OpenShift: as
+the user 1001 (or any user of the group 0 on OpenShift), without capabilities,
+with a read-only root file system. So HAProxy only listens on unprivileged
+ports, 8080 in the default configuration, which answers on `/healthz`.
+
+Each package and image comes with its SBOM, a build provenance attestation,
+and signatures, see [SECURITY.md](SECURITY.md) and the release notes to verify
+them.
+
+#### Building
+
+The `Containerfile` builds and tests HAProxy, the packages and the images,
+on all the supported distributions. The first build takes long, since it
+builds the OpenTelemetry C++ SDK, whose compiler jobs need a lot of memory, so
+their number is limited by `JOBS` (4 by default):
+
+```
+podman build --build-arg JOBS=6 --memory 14g -t haproxy-cloudauth .
+podman build --target test --build-arg BASE_IMAGE=almalinux:9 .
+podman build --target packages --build-arg BASE_IMAGE=almalinux:9 \
+    --output type=local,dest=dist .
+```
+
+The HAProxy and OpenTelemetry filter versions are set with the `HAPROXY_REF`
+and `OTEL_FILTER_REF` build arguments, see the `Containerfile` and the
+scripts of `ci/` for the others. The GitHub workflows of `.github/workflows`
+build, test and scan everything on each change and every week, and publish
+the releases.
 
 ### License
 

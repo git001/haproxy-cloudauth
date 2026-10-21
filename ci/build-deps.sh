@@ -24,7 +24,7 @@ set -eu
 PREFIX="${PREFIX:-/opt/haproxy-cloudauth}"
 JOBS="${JOBS:-4}"
 AWSLC_REPO="${AWSLC_REPO:-https://github.com/aws/aws-lc.git}"
-AWSLC_REF="${AWSLC_REF:-v4.0.0}"
+AWSLC_REF="${AWSLC_REF:-v5.11.0}"
 OTELC_REPO="${OTELC_REPO:-https://github.com/haproxytech/opentelemetry-c-wrapper.git}"
 OTELC_REF="${OTELC_REF:-v3.4.0}"
 CURL_VERSION="${CURL_VERSION:-8.22.0}"

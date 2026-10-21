@@ -51,7 +51,7 @@ rhel | almalinux | rocky | centos | ol)
 	dist="el${VERSION_ID%%.*}"
 	release="${PKG_RELEASE}.${dist}"
 	envfile=etc/sysconfig/haproxy-cloudauth
-	depends="glibc libstdc++ lua-libs pcre2 zlib ca-certificates shadow-utils"
+	depends="glibc libstdc++ libxcrypt lua-libs pcre2 zlib ca-certificates shadow-utils"
 	;;
 debian | ubuntu)
 	format=deb
@@ -61,7 +61,7 @@ debian | ubuntu)
 	esac
 	release="${PKG_RELEASE}~${dist}"
 	envfile=etc/default/haproxy-cloudauth
-	depends="libc6 libstdc++6 liblua5.4-0 libpcre2-8-0 zlib1g ca-certificates passwd"
+	depends="libc6 libcrypt1 libstdc++6 liblua5.4-0 libpcre2-8-0 zlib1g ca-certificates passwd"
 	;;
 *)
 	echo "unsupported distribution: ${ID} ${VERSION_ID}" >&2

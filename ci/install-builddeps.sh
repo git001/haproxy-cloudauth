@@ -21,7 +21,7 @@ debian | ubuntu)
 	apt-get update
 	apt-get install -y --no-install-recommends \
 		autoconf autoconf-archive automake binutils ca-certificates cmake \
-		debhelper file g++ gawk gcc git libc6-dev libgpg-error-dev \
+		debhelper file g++ gawk gcc git libc6-dev libcrypt-dev libgpg-error-dev \
 		libkeyutils-dev liblua5.4-dev liblzma-dev libpcre2-dev libtool make \
 		patch perl pkgconf python3 wget zlib1g-dev
 	rm -rf /var/lib/apt/lists/*
@@ -46,9 +46,9 @@ rhel | almalinux | rocky | centos | ol)
 	dnf install -y \
 		autoconf autoconf-archive automake binutils ca-certificates cmake \
 		diffutils file findutils gawk gcc gcc-c++ git glibc-devel \
-		keyutils-libs-devel libgpg-error-devel libtool lua-devel make patch \
-		pcre2-devel perl pkgconf-pkg-config python3 rpm-build wget xz-devel \
-		zlib-devel ${extra}
+		keyutils-libs-devel libgpg-error-devel libtool libxcrypt-devel \
+		lua-devel make patch pcre2-devel perl pkgconf-pkg-config python3 \
+		rpm-build wget xz-devel zlib-devel ${extra}
 	dnf clean all
 	;;
 

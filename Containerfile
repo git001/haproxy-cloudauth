@@ -35,9 +35,10 @@
 #   runtime : the image, which installs the Debian package.
 #   runtime-debug : the same image, with bash and curl.
 #
-# AWS-LC is the version of the HAProxy images, instead of the FIPS one of the
-# bundle of the wrapper. curl, the SDK and HAProxy are all built with it, so
-# that the process only loads one SSL library. HAProxy supports QUIC with it.
+# AWS-LC is its latest release, like in the HAProxy images, instead of the
+# FIPS one of the bundle of the wrapper. curl, the SDK and HAProxy are all
+# built with it, so that the process only loads one SSL library. HAProxy
+# supports QUIC with it.
 
 ARG BASE_IMAGE=docker.io/library/debian:trixie
 ARG RUNTIME_IMAGE=docker.io/library/debian:trixie-slim
@@ -45,7 +46,7 @@ ARG RUNTIME_IMAGE=docker.io/library/debian:trixie-slim
 FROM ${BASE_IMAGE} AS deps
 
 ARG PREFIX=/opt/haproxy-cloudauth
-ARG AWSLC_REF=v4.0.0
+ARG AWSLC_REF=v5.11.0
 ARG OTELC_REF=v3.4.0
 ARG JOBS=4
 

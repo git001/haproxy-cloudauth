@@ -1,0 +1,48 @@
+# Builds, tests and scans everything on each change, and every week, so that
+# the packages and the image are rebuilt on the updated distributions and
+# checked against the new vulnerabilities. The image built from main is pushed
+# as "edge".
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        env:
+          SHA: ${{ github.sha }}
+        run: echo "version=0.0.0~git$(date -u +%Y%m%d).${SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+    with:
+      version: ${{ needs.version.outputs.version }}
+      publish: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      image-tags: |
+        type=edge,branch=main
+        type=sha,format=long

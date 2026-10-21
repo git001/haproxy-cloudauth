@@ -32,7 +32,8 @@
 #   test    : the regression and unit tests of the cloudauth filter.
 #   package : the RPM or DEB package of the distribution (ci/package.sh), and
 #             its SBOM, exported by the "packages" stage.
-#   runtime : HAProxy and the shared libraries of PREFIX only.
+#   runtime : the image, which installs the Debian package.
+#   runtime-debug : the same image, with bash and curl.
 #
 # AWS-LC is the version of the HAProxy images, instead of the FIPS one of the
 # bundle of the wrapper. curl, the SDK and HAProxy are all built with it, so
@@ -92,36 +93,47 @@ FROM scratch AS packages
 COPY --from=package /out/ /
 
 
+# The image installs the Debian package. It runs on Kubernetes and OpenShift
+# with their default security settings: as a non-root user (any user of the
+# group 0 on OpenShift), without capabilities, with a read-only root file
+# system, so it only listens on unprivileged ports (8080 in the default
+# configuration).
 FROM ${RUNTIME_IMAGE} AS runtime
 
-ARG PREFIX=/opt/haproxy-cloudauth
-
 LABEL org.opencontainers.image.title="HAProxy with the cloudauth filter"
+LABEL org.opencontainers.image.description="HAProxy with the cloudauth and the OpenTelemetry filters"
 LABEL org.opencontainers.image.source="https://github.com/git001/haproxy-cloudauth"
+LABEL org.opencontainers.image.licenses="GPL-2.0-or-later AND LGPL-2.1-or-later"
 
-ENV HAPROXY_UID=haproxy
-ENV HAPROXY_GID=haproxy
-
-RUN apt-get update \
+# The package is mounted, which some builders (buildah) do not take into
+# account to reuse a cached layer, so its checksum is copied first, and
+# checked. The user is created before the package, which keeps it, so that its
+# id is fixed. Its primary group is the group 0, like the arbitrary users of
+# OpenShift.
+COPY --from=package /out/haproxy-cloudauth-deb*.sha256 /usr/share/haproxy-cloudauth/package.sha256
+RUN --mount=type=bind,from=package,source=/out,target=/tmp/out \
+    (cd /tmp/out && sha256sum -c /usr/share/haproxy-cloudauth/package.sha256) \
+ && useradd --system --uid 1001 --gid 0 --no-create-home \
+        --home-dir /var/lib/haproxy --shell /usr/sbin/nologin haproxy-cloudauth \
+ && apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates liblua5.4-0 libpcre2-8-0 zlib1g \
- && rm -rf /var/lib/apt/lists/*
+        /tmp/out/haproxy-cloudauth_*.deb \
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -s /usr/sbin/haproxy-cloudauth /usr/local/sbin/haproxy \
+ && mkdir -p /usr/local/etc/haproxy /var/lib/haproxy \
+ && cp /etc/haproxy-cloudauth/haproxy-cloudauth.cfg /usr/local/etc/haproxy/haproxy.cfg \
+ && ln -s /usr/share/haproxy-cloudauth/errors /usr/local/etc/haproxy/errors \
+ && ln -s /usr/local/etc/haproxy /etc/haproxy \
+ && chgrp 0 /var/lib/haproxy \
+ && chmod 0770 /var/lib/haproxy \
+ && haproxy -vv \
+ && haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
 
-# Only the shared libraries of PREFIX are needed. AWS-LC uses the CA
-# certificates of Debian (/etc/ssl/certs) for "ca-file @system-ca".
-COPY --from=build ${PREFIX}/lib/ ${PREFIX}/lib/
-COPY --from=build /usr/src/haproxy/haproxy /usr/local/sbin/haproxy
-COPY --from=build /usr/src/haproxy/examples/errorfiles/ /usr/local/etc/haproxy/errors
 COPY --chmod=755 docker-entrypoint.sh /
 
-RUN find "${PREFIX}/lib" -mindepth 1 -maxdepth 1 ! -name '*.so*' -exec rm -rf {} + \
- && groupadd --system "$HAPROXY_GID" \
- && useradd --system --gid "$HAPROXY_GID" --no-create-home --shell /usr/sbin/nologin "$HAPROXY_UID" \
- && ln -s /usr/local/sbin/haproxy /usr/sbin/haproxy \
- && mkdir -p /var/lib/haproxy \
- && chown "$HAPROXY_UID:$HAPROXY_GID" /var/lib/haproxy \
- && ln -s /usr/local/etc/haproxy /etc/haproxy \
- && haproxy -vv
+USER 1001
+WORKDIR /var/lib/haproxy
+EXPOSE 8080
 
 STOPSIGNAL SIGUSR1
 
@@ -129,3 +141,16 @@ STOPSIGNAL SIGUSR1
 # when the arguments are only options (e.g. "-vv").
 ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["haproxy", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+
+
+# The same image with bash and curl, to debug from inside the pod. curl must
+# support telnet, to test plain TCP services.
+FROM runtime AS runtime-debug
+
+USER root
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bash curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && curl -V \
+ && curl -V | grep '^Protocols:' | grep -qw telnet
+USER 1001

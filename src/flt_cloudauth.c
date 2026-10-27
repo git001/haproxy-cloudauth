@@ -277,11 +277,13 @@ static int cloudauth_flt_parse_instance(char **args, struct proxy *px,
 /* Registers the filter class. The requests are authenticated after all the
  * other filters, which may still change them, so the class is placed after the
  * last built-in one on the request side. It does not process the responses.
- * The functions of the filter API report their own failures.
+ * A backend signs its requests with a single profile, so the class has no flag
+ * and allows only one instance per proxy. The functions of the filter API
+ * report their own failures.
  */
 static void cloudauth_flt_register_class(void)
 {
-	if (filter_register_class(&flt_cloudauth_cls, cloudauth_filter_cls_name,
+	if (filter_register_class(&flt_cloudauth_cls, cloudauth_filter_cls_name, 0,
 	                          cloudauth_flt_parse_instance) < 0)
 		return;
 	filter_place_class(&flt_cloudauth_cls, FLT_SIDE_REQ, "fcgi", FLT_POS_AFTER);

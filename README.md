@@ -18,7 +18,9 @@ itself.
 
 - HAProxy 3.5 or newer, whose filter API allows an addon to register its
   filter class (`filter_register_class()`), built with an OpenSSL compatible
-  library (`USE_OPENSSL=1`).
+  library (`USE_OPENSSL=1`). The development versions need commit 23591a429
+  ("MINOR: filters: Set the class flags on filter class registration") or a
+  later one, which added the flags argument of `filter_register_class()`.
 - No other library.
 
 ### Building

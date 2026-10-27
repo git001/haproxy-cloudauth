@@ -5,7 +5,10 @@
 #
 #   podman build -t haproxy-cloudauth .                  # runtime image
 #   podman build --target test .                         # build and test only
-#   podman build --build-arg HAPROXY_REF=v3.4.0 ...      # another HAProxy
+#   podman build --build-arg HAPROXY_REF=<ref> ...       # another HAProxy
+#
+# HAPROXY_REF is a branch or a tag of HAProxy 3.5 or newer (see the
+# requirements in the README), master by default.
 #
 # The build, test and package stages also run on the other supported
 # distributions (see ci/install-builddeps.sh), the runtime image only on Debian:
